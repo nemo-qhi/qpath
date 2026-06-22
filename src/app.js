@@ -157,6 +157,8 @@ function App() {
   const [activeQuizId, setActiveQuizId] = useState(samples[0].id);
   const [message, setMessage] = useState("");
   const [firebaseStatus, setFirebaseStatus] = useState("connecting");
+  const [quizSessionIds, setQuizSessionIds] = useState([]);
+  const [quizSessionPosition, setQuizSessionPosition] = useState(0);
 
   useEffect(() => localStorage.setItem(STORAGE.quizzes, JSON.stringify(quizzes)), [quizzes]);
   useEffect(() => localStorage.setItem(STORAGE.profile, JSON.stringify(profile)), [profile]);
@@ -244,17 +246,47 @@ function App() {
     [comments, membership?.classId]
   );
   const activeQuiz = useMemo(
-    () => classQuizzes.find((quiz) => quiz.id === activeQuizId) || classQuizzes[0],
+    () => classQuizzes.find((quiz) => quiz.id === activeQuizId) || null,
     [activeQuizId, classQuizzes]
   );
+  const quizProgress = quizSessionIds[quizSessionPosition] === activeQuizId
+    ? {
+        current: quizSessionPosition + 1,
+        total: quizSessionIds.length,
+        hasNext: quizSessionPosition < quizSessionIds.length - 1,
+      }
+    : null;
   const activeClass = useMemo(
     () => classes.find((classroom) => classroom.id === membership?.classId) || null,
     [classes, membership]
   );
   const openQuiz = (id) => {
-    if (!classQuizzes.some((quiz) => quiz.id === id)) return;
+    const startIndex = classQuizzes.findIndex((quiz) => quiz.id === id);
+    if (startIndex < 0) return;
+    const session = [
+      ...classQuizzes.slice(startIndex),
+      ...classQuizzes.slice(0, startIndex),
+    ].map((quiz) => quiz.id);
+    setQuizSessionIds(session);
+    setQuizSessionPosition(0);
     setActiveQuizId(id);
     setScreen("answer");
+  };
+  const goToNextQuiz = (wasCorrect) => {
+    const nextSessionIds = wasCorrect ? quizSessionIds : [...quizSessionIds, activeQuizId];
+    const nextPosition = quizSessionPosition + 1;
+    const nextId = nextSessionIds[nextPosition];
+    if (nextId) {
+      setQuizSessionIds(nextSessionIds);
+      setQuizSessionPosition(nextPosition);
+      setActiveQuizId(nextId);
+      setScreen("answer");
+      return;
+    }
+    setQuizSessionIds([]);
+    setQuizSessionPosition(0);
+    setActiveQuizId("");
+    setScreen("home");
   };
   const recordAnswer = (id) => {
     setQuizzes((list) => list.map((quiz) => quiz.id === id ? { ...quiz, solvedCount: quiz.solvedCount + 1 } : quiz));
@@ -362,7 +394,12 @@ function App() {
         firebaseStatus === "error" && h("div", { className: "sync-notice" }, "オンライン同期を確認できません。Firebaseの設定を確認してください。"),
         screen === "home" && h(HomeScreen, { setScreen, membership, activeClass }),
         screen === "quizzes" && h(QuizList, { quizzes: classQuizzes, openQuiz, message, clearMessage: () => setMessage("") }),
-        screen === "answer" && activeQuiz && h(AnswerScreen, { quiz: activeQuiz, recordAnswer }),
+        screen === "answer" && activeQuiz && h(AnswerScreen, {
+          quiz: activeQuiz,
+          recordAnswer,
+          quizProgress,
+          goToNextQuiz,
+        }),
         screen === "create" && h(CreateScreen, { createQuiz }),
         screen === "study" && h(StudyScreen, {
           comments: classComments,
@@ -762,10 +799,10 @@ function QuizList({ quizzes, openQuiz, message, clearMessage }) {
   );
 }
 
-function AnswerScreen({ quiz, recordAnswer }) {
+function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
   const [selected, setSelected] = useState("");
   const [result, setResult] = useState(null);
-  useEffect(() => { setSelected(""); setResult(null); }, [quiz.id]);
+  useEffect(() => { setSelected(""); setResult(null); }, [quiz.id, quizProgress?.current]);
   const submit = () => {
     setResult({ isCorrect: selected === quiz.correctAnswer });
     recordAnswer(quiz.id);
@@ -773,6 +810,7 @@ function AnswerScreen({ quiz, recordAnswer }) {
   return h("section", { className: "screen" },
     h(Header, { eyebrow: quiz.subject, title: quiz.title, body: `${quiz.difficulty}・${quiz.author}` }),
     h("article", { className: "answer-card" },
+      quizProgress && h("p", { className: "session-progress" }, `${quizProgress.current} / ${quizProgress.total} 問目`),
       h("p", { className: "question-text" }, quiz.question),
       h("div", { className: "choice-list" },
         quiz.choices.map((choice, index) =>
@@ -790,7 +828,14 @@ function AnswerScreen({ quiz, recordAnswer }) {
           h("strong", null, result.isCorrect ? "正解です！" : "不正解でも、間違えて良い。ここから学べます"),
           !result.isCorrect && h("p", null, "挑戦したことが学びです。ここから理解が深まります。"),
           h("div", { className: "explanation" }, h("span", null, "解説"), h("p", null, quiz.explanation)),
-          h("button", { className: "secondary-button", onClick: () => { setSelected(""); setResult(null); } }, h(RotateCcw, { size: 16 }), "もう一回挑戦")
+          quizProgress && !quizProgress.hasNext && result.isCorrect && h("p", { className: "complete-message" }, "解き始めた時点の問題をすべて挑戦しました。挑戦したことが学びです。"),
+          h("div", { className: "answer-actions" },
+            h("button", { className: "secondary-button", onClick: () => { setSelected(""); setResult(null); } }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
+            h("button", { className: "primary-button", onClick: () => goToNextQuiz(result.isCorrect) },
+              quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度出題へ",
+              h(ChevronRight, { size: 18 })
+            )
+          )
         )
     )
   );

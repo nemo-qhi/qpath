@@ -293,6 +293,17 @@ button {
   font-weight: 800;
 }
 
+.session-progress {
+  width: fit-content;
+  margin: 0 0 12px;
+  padding: 7px 11px;
+  color: #1478b7;
+  border-radius: 999px;
+  background: #e5f5ff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
 .choice-list {
   display: grid;
   gap: 10px;
@@ -354,6 +365,19 @@ button {
 
 .result-box p {
   margin: 0;
+}
+
+.complete-message {
+  padding: 12px;
+  color: #12623f;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  font-weight: 800;
+}
+
+.answer-actions {
+  display: grid;
+  gap: 10px;
 }
 
 .explanation {
