@@ -46,6 +46,23 @@ const STORAGE = {
   classes: "qpath.classes",
 };
 
+const SUBJECT_OPTIONS = ["国語", "数学", "化学", "生物", "物理", "地学", "日本史", "世界史", "公民", "地理", "英語", "その他"];
+const SUBJECT_ORDER = new Map(SUBJECT_OPTIONS.map((subject, index) => [subject, index]));
+
+function getSubjectGroups(quizzes) {
+  const counts = quizzes.reduce((items, quiz) => {
+    const subject = quiz.subject || "その他";
+    items.set(subject, (items.get(subject) || 0) + 1);
+    return items;
+  }, new Map());
+  return Array.from(counts, ([subject, count]) => ({ subject, count }))
+    .sort((a, b) => {
+      const aIndex = SUBJECT_ORDER.has(a.subject) ? SUBJECT_ORDER.get(a.subject) : SUBJECT_OPTIONS.length;
+      const bIndex = SUBJECT_ORDER.has(b.subject) ? SUBJECT_ORDER.get(b.subject) : SUBJECT_OPTIONS.length;
+      return aIndex === bIndex ? a.subject.localeCompare(b.subject, "ja") : aIndex - bIndex;
+    });
+}
+
 function generateClassCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
@@ -309,12 +326,13 @@ function App() {
     () => classes.find((classroom) => classroom.id === membership?.classId) || null,
     [classes, membership]
   );
-  const openQuiz = (id) => {
-    const startIndex = classQuizzes.findIndex((quiz) => quiz.id === id);
+  const openQuiz = (id, quizPool = classQuizzes) => {
+    const sessionQuizzes = quizPool.length ? quizPool : classQuizzes;
+    const startIndex = sessionQuizzes.findIndex((quiz) => quiz.id === id);
     if (startIndex < 0) return;
     const session = [
-      ...classQuizzes.slice(startIndex),
-      ...classQuizzes.slice(0, startIndex),
+      ...sessionQuizzes.slice(startIndex),
+      ...sessionQuizzes.slice(0, startIndex),
     ].map((quiz) => quiz.id);
     setQuizSessionIds(session);
     setQuizSessionPosition(0);
@@ -846,17 +864,53 @@ function HomeScreen({ setScreen, membership, activeClass }) {
 }
 
 function QuizList({ quizzes, openQuiz, message, clearMessage }) {
+  const [selectedSubject, setSelectedSubject] = useState("");
+  const subjectGroups = useMemo(() => getSubjectGroups(quizzes), [quizzes]);
+  const visibleQuizzes = selectedSubject
+    ? quizzes.filter((quiz) => quiz.subject === selectedSubject)
+    : quizzes;
+  useEffect(() => {
+    if (selectedSubject && !subjectGroups.some((group) => group.subject === selectedSubject)) {
+      setSelectedSubject("");
+    }
+  }, [selectedSubject, subjectGroups]);
+
   return h("section", { className: "screen" },
-    h(Header, { eyebrow: "Quiz", title: "クイズ一覧", body: "匿名で作られた問題に、まずは一問だけ挑戦。" }),
+    h(Header, {
+      eyebrow: "Quiz",
+      title: "クイズ一覧",
+      body: selectedSubject
+        ? `${selectedSubject}の問題群だけで挑戦できます。`
+        : "教科ごとの問題群を選んで、まずは一問だけ挑戦。"
+    }),
     message && h("button", { className: "notice", onClick: clearMessage }, h(CheckCircle2, { size: 18 }), message),
+    h("div", { className: "subject-filter", "aria-label": "教科で問題群を選ぶ" },
+      h("button", {
+        className: `subject-filter-button ${selectedSubject === "" ? "active" : ""}`,
+        type: "button",
+        onClick: () => setSelectedSubject(""),
+      }, `すべて ${quizzes.length}`),
+      subjectGroups.map((group) =>
+        h("button", {
+          className: `subject-filter-button ${selectedSubject === group.subject ? "active" : ""}`,
+          type: "button",
+          key: group.subject,
+          onClick: () => setSelectedSubject(group.subject),
+        }, `${group.subject} ${group.count}`)
+      )
+    ),
     h("div", { className: "quiz-list" },
-      quizzes.map((quiz) =>
+      visibleQuizzes.length === 0 && h("article", { className: "empty-card" },
+        h("strong", null, "この問題群にはまだクイズがありません"),
+        h("p", null, "作問も大切な学びです。最初の一問を作ってみましょう。")
+      ),
+      visibleQuizzes.map((quiz) =>
         h("article", { className: "quiz-card", key: quiz.id },
           h("div", { className: "card-top" }, h("span", { className: "subject" }, quiz.subject), h("span", { className: `difficulty ${quiz.difficulty}` }, quiz.difficulty)),
           h("h2", null, quiz.title),
           h("p", null, quiz.question),
           h("div", { className: "meta-row" }, h("span", null, quiz.author), h("span", null, `${quiz.solvedCount} 回挑戦`), h("span", null, `${quiz.likes} いい問題`)),
-          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id) }, "挑戦する")
+          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id, visibleQuizzes) }, "挑戦する")
         )
       )
     )
@@ -941,7 +995,10 @@ function CreateScreen({ createQuiz }) {
     h("form", { className: "form-card", onSubmit: submit },
       field("タイトル", h("input", { value: form.title, onChange: (e) => update("title", e.target.value), placeholder: "例：比例の基本" })),
       h("div", { className: "two-columns" },
-        field("教科", h("input", { value: form.subject, onChange: (e) => update("subject", e.target.value), placeholder: "数学" })),
+        field("教科", h("select", { value: form.subject, onChange: (e) => update("subject", e.target.value) },
+          h("option", { value: "" }, "選択してください"),
+          SUBJECT_OPTIONS.map((subject) => h("option", { value: subject, key: subject }, subject))
+        )),
         field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい")))
       ),
       field("問題文", h("textarea", { value: form.question, onChange: (e) => update("question", e.target.value), placeholder: "問題文を入力", rows: 3 })),
