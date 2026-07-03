@@ -303,6 +303,15 @@ function App() {
     setNavigationIndex(nextIndex);
   };
 
+  const goBackSafely = () => {
+    const historyState = window.history.state;
+    if (historyState?.qpath === "app" && navigationIndexRef.current > 0) {
+      window.history.back();
+      return;
+    }
+    navigateTo("home", { replace: true });
+  };
+
   const classQuizzes = useMemo(
     () => membership?.classId ? quizzes.filter((quiz) => belongsToClass(quiz, membership.classId)) : [],
     [quizzes, membership?.classId]
@@ -469,11 +478,11 @@ function App() {
   return h(React.Fragment, null,
     h("div", { className: "app-shell" },
       h("main", { className: "phone-frame" },
-        navigationIndex > 0 && h("div", { className: "page-back-row" },
+        screen !== "home" && h("div", { className: "page-back-row" },
           h("button", {
             className: "page-back-button",
             type: "button",
-            onClick: () => window.history.back(),
+            onClick: goBackSafely,
             "aria-label": "ひとつ前の画面に戻る",
             title: "戻る",
           }, h(ArrowLeft, { size: 21 }), h("span", null, "戻る"))
