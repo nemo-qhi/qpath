@@ -1,1118 +1,1199 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
-import {
-  ArrowLeft,
-  BookOpen,
-  ChartNoAxesColumnIncreasing,
-  CheckCircle2,
-  ChevronRight,
-  CircleUserRound,
-  Clipboard,
-  Edit3,
-  GraduationCap,
-  Heart,
-  KeyRound,
-  Lightbulb,
-  LogOut,
-  MessageCircle,
-  PencilLine,
-  Plus,
-  RotateCcw,
-  School,
-  Send,
-  Sparkles,
-  Trophy,
-  Users,
-} from "lucide-react";
-import {
-  ensureFirebaseReady,
-  findClassByCode,
-  increaseQuizSolvedCount,
-  migrateLocalData,
-  saveClass,
-  saveComment,
-  saveQuiz,
-  subscribeClasses,
-  subscribeComments,
-  subscribeQuizzes,
-} from "./firebase.js";
-
-const h = React.createElement;
-const STORAGE = {
-  quizzes: "qpath.quizzes",
-  profile: "qpath.profile",
-  comments: "qpath.comments",
-  membership: "qpath.membership",
-  classes: "qpath.classes",
-};
-
-const SUBJECT_OPTIONS = ["国語", "数学", "化学", "生物", "物理", "地学", "日本史", "世界史", "公民", "地理", "英語", "その他"];
-const SUBJECT_ORDER = new Map(SUBJECT_OPTIONS.map((subject, index) => [subject, index]));
-
-function getSubjectGroups(quizzes) {
-  const counts = quizzes.reduce((items, quiz) => {
-    const subject = quiz.subject || "その他";
-    items.set(subject, (items.get(subject) || 0) + 1);
-    return items;
-  }, new Map());
-  return Array.from(counts, ([subject, count]) => ({ subject, count }))
-    .sort((a, b) => {
-      const aIndex = SUBJECT_ORDER.has(a.subject) ? SUBJECT_ORDER.get(a.subject) : SUBJECT_OPTIONS.length;
-      const bIndex = SUBJECT_ORDER.has(b.subject) ? SUBJECT_ORDER.get(b.subject) : SUBJECT_OPTIONS.length;
-      return aIndex === bIndex ? a.subject.localeCompare(b.subject, "ja") : aIndex - bIndex;
-    });
+* {
+  box-sizing: border-box;
 }
 
-function generateClassCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+:root {
+  color: #14324a;
+  background: #eaf7ff;
+  font-family: Inter, "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
 }
 
-const samples = [
-  {
-    id: "sample-1",
-    title: "一次方程式の考え方",
-    subject: "数学",
-    question: "3x + 5 = 20 のとき、x の値はどれですか？",
-    choices: ["3", "4", "5", "6"],
-    correctAnswer: "5",
-    explanation: "両辺から5を引くと 3x = 15 です。15を3で割ると x = 5 になります。ここから理解が深まります。",
-    difficulty: "普通",
-    author: "匿名ユーザー",
-    solvedCount: 12,
-    likes: 8,
-  },
-  {
-    id: "sample-2",
-    title: "英単語 context",
-    subject: "英語",
-    question: "context の意味として近いものはどれですか？",
-    choices: ["文脈", "結論", "発音", "例外"],
-    correctAnswer: "文脈",
-    explanation: "context は文章や会話の前後関係、つまり文脈を表します。例文と一緒に覚えると定着しやすいです。",
-    difficulty: "簡単",
-    author: "匿名ユーザー",
-    solvedCount: 21,
-    likes: 14,
-  },
-  {
-    id: "sample-3",
-    title: "光合成で作られるもの",
-    subject: "理科",
-    question: "植物が光合成で主に作るものはどれですか？",
-    choices: ["酸素とデンプン", "窒素と水", "塩分と二酸化炭素", "鉄と水素"],
-    correctAnswer: "酸素とデンプン",
-    explanation: "植物は光を使って二酸化炭素と水からデンプンなどを作り、酸素を出します。挑戦したことが学びです。",
-    difficulty: "普通",
-    author: "匿名ユーザー",
-    solvedCount: 16,
-    likes: 11,
-  },
-  {
-    id: "sample-4",
-    title: "歴史の時代順",
-    subject: "社会",
-    question: "次のうち、奈良時代のあとに始まった時代はどれですか？",
-    choices: ["平安時代", "弥生時代", "江戸時代", "明治時代"],
-    correctAnswer: "平安時代",
-    explanation: "奈良時代のあと、794年に都が平安京へ移り、平安時代が始まりました。",
-    difficulty: "簡単",
-    author: "匿名ユーザー",
-    solvedCount: 9,
-    likes: 6,
-  },
-];
-
-const sampleComments = [
-  { id: "c1", author: "匿名ユーザー", text: "解説を見ると、どこで考え直せばいいか分かりました。", reactions: { clear: 3, retry: 2, good: 4 } },
-  { id: "c2", author: "匿名ユーザー", text: "選択肢の並びがちょうど考えやすかったです。", reactions: { clear: 5, retry: 1, good: 6 } },
-];
-
-function isSampleQuiz(quiz) {
-  return quiz.id.startsWith("sample-");
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.9), transparent 28rem),
+    linear-gradient(180deg, #f7fcff 0%, #e7f5ff 100%);
 }
 
-function belongsToClass(quiz, classId) {
-  return isSampleQuiz(quiz) || quiz.classId === classId;
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
 
-function belongsToClassComment(comment, classId) {
-  return comment.id === "c1" || comment.id === "c2" || comment.classId === classId;
+button {
+  border: 0;
 }
 
-function read(key, fallback) {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? JSON.parse(value) : fallback;
-  } catch {
-    return fallback;
+.app-shell {
+  min-height: 100vh;
+  padding-bottom: 86px;
+}
+
+.phone-frame {
+  width: min(100%, 520px);
+  margin: 0 auto;
+}
+
+.page-back-row {
+  padding: 12px 16px 0;
+}
+
+.page-back-button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 13px 0 11px;
+  color: #176f9f;
+  border: 1px solid #c7e7f7;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 7px 18px rgba(31, 119, 164, 0.1);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.page-back-button:active {
+  background: #e7f6ff;
+}
+
+.screen {
+  min-height: calc(100vh - 86px);
+  padding: 20px 16px 24px;
+}
+
+.sync-notice {
+  margin: 12px 16px -4px;
+  padding: 10px 12px;
+  color: #8a5a10;
+  border: 1px solid #ffe1a6;
+  border-radius: 14px;
+  background: #fff7df;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.page-header {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  color: #0874b9;
+  background: #dff3ff;
+  box-shadow: inset 0 0 0 1px #b9e4fb;
+}
+
+.page-header p {
+  margin: 0;
+  color: #3e8ec0;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.page-header h1 {
+  margin: 0;
+  color: #12344d;
+  font-size: clamp(1.65rem, 8vw, 2.35rem);
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.page-header span {
+  color: #5d7488;
+  font-size: 0.95rem;
+}
+
+.hero-card,
+.quiz-card,
+.answer-card,
+.form-card,
+.comment-box,
+.comment-card,
+.profile-card,
+.stat-card,
+.revenue-card,
+.empty-card {
+  border: 1px solid #cdeafa;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 16px 42px rgba(27, 107, 155, 0.11);
+}
+
+.hero-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px;
+  color: #0c5b92;
+  background: linear-gradient(135deg, #ffffff 0%, #dff4ff 100%);
+}
+
+.hero-card strong,
+.hero-card p {
+  margin: 0;
+}
+
+.hero-card p {
+  margin-top: 5px;
+  color: #426b84;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.action-card {
+  position: relative;
+  min-height: 150px;
+  padding: 16px;
+  text-align: left;
+  color: #12344d;
+  border-radius: 22px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 109, 158, 0.1);
+}
+
+.action-card svg:first-child {
+  color: #1689cf;
+}
+
+.action-card span,
+.action-card small {
+  display: block;
+}
+
+.action-card span {
+  margin-top: 18px;
+  font-size: 1.04rem;
+  font-weight: 800;
+}
+
+.action-card small {
+  margin-top: 4px;
+  color: #637f91;
+}
+
+.action-card svg:last-child {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  color: #7bbde4;
+}
+
+.quiz-list,
+.comment-list {
+  display: grid;
+  gap: 14px;
+}
+
+.subject-filter {
+  display: flex;
+  gap: 8px;
+  margin: -2px -16px 14px;
+  padding: 2px 16px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.subject-filter::-webkit-scrollbar {
+  display: none;
+}
+
+.subject-filter-button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 13px;
+  color: #176f9f;
+  border: 1px solid #c7e7f7;
+  border-radius: 999px;
+  background: #ffffff;
+  font-weight: 900;
+  white-space: nowrap;
+  box-shadow: 0 7px 18px rgba(31, 119, 164, 0.08);
+}
+
+.subject-filter-button.active {
+  color: #ffffff;
+  border-color: #1597d5;
+  background: linear-gradient(135deg, #1597d5, #35b9e8);
+  box-shadow: 0 10px 22px rgba(20, 143, 207, 0.2);
+}
+
+.quiz-card {
+  padding: 18px;
+}
+
+.empty-card {
+  padding: 18px;
+  color: #24465d;
+}
+
+.empty-card p {
+  margin-bottom: 0;
+  color: #526b7d;
+}
+
+.card-top,
+.meta-row,
+.reaction-row,
+.avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-top {
+  justify-content: space-between;
+}
+
+.subject,
+.difficulty {
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.subject {
+  color: #0c71ae;
+  background: #e1f4ff;
+}
+
+.difficulty {
+  color: #2f6f54;
+  background: #e3f8ec;
+}
+
+.difficulty.難しい {
+  color: #8a5a10;
+  background: #fff1cf;
+}
+
+.quiz-card h2 {
+  margin: 12px 0 6px;
+  font-size: 1.12rem;
+}
+
+.quiz-card p,
+.comment-card p,
+.profile-card p,
+.revenue-card p {
+  color: #526b7d;
+}
+
+.meta-row {
+  margin: 14px 0;
+  color: #6a8192;
+  font-size: 0.82rem;
+}
+
+.primary-button,
+.secondary-button {
+  width: 100%;
+  min-height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 16px;
+  font-weight: 900;
+}
+
+.primary-button {
+  color: #ffffff;
+  background: linear-gradient(135deg, #1597d5, #35b9e8);
+  box-shadow: 0 12px 22px rgba(20, 143, 207, 0.22);
+}
+
+.primary-button:disabled {
+  color: #7f9caf;
+  background: #d8ecf7;
+  box-shadow: none;
+}
+
+.secondary-button {
+  color: #1478b7;
+  background: #e5f5ff;
+}
+
+.notice {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 14px;
+  color: #136c9f;
+  border-radius: 18px;
+  background: #e1f7ff;
+  font-weight: 800;
+}
+
+.answer-card,
+.form-card,
+.comment-box,
+.profile-card {
+  padding: 18px;
+}
+
+.question-text {
+  margin: 0 0 16px;
+  color: #18384f;
+  font-size: 1.12rem;
+  font-weight: 800;
+}
+
+.session-progress {
+  width: fit-content;
+  margin: 0 0 12px;
+  padding: 7px 11px;
+  color: #1478b7;
+  border-radius: 999px;
+  background: #e5f5ff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.choice-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.choice-button {
+  width: 100%;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  text-align: left;
+  color: #1d3c54;
+  border: 2px solid #d3eaf7;
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.choice-button span {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #1284c6;
+  border-radius: 12px;
+  background: #e6f6ff;
+  font-weight: 900;
+}
+
+.choice-button.selected {
+  border-color: #30a9dd;
+  background: #eefaff;
+}
+
+.choice-button.correct {
+  border-color: #66cfa1;
+  background: #effcf6;
+}
+
+.result-box {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+}
+
+.result-box.positive {
+  color: #12623f;
+  background: #eafbf2;
+}
+
+.result-box.learning {
+  color: #0e6898;
+  background: #e6f6ff;
+}
+
+.result-box p {
+  margin: 0;
+}
+
+.complete-message {
+  padding: 12px;
+  color: #12623f;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  font-weight: 800;
+}
+
+.answer-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.explanation {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.explanation span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.form-card,
+.comment-box {
+  display: grid;
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: #24465d;
+  font-weight: 800;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid #c9e5f5;
+  border-radius: 15px;
+  padding: 13px 14px;
+  color: #16354d;
+  background: #f8fdff;
+  outline: none;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: #2aa7dc;
+  box-shadow: 0 0 0 4px rgba(42, 167, 220, 0.14);
+}
+
+.subject-select {
+  min-height: 52px;
+  border-width: 2px;
+  background-color: #f7fcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.subject-select:invalid {
+  color: #60798b;
+}
+
+.two-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.choice-editor {
+  display: grid;
+  gap: 9px;
+}
+
+.choice-editor > span {
+  color: #24465d;
+  font-weight: 900;
+}
+
+.choice-input {
+  grid-template-columns: 24px 1fr;
+  align-items: center;
+}
+
+.soft-message {
+  margin: 0;
+  color: #1478b7;
+  font-weight: 800;
+}
+
+.comment-box {
+  margin-bottom: 14px;
+}
+
+.comment-card {
+  padding: 16px;
+}
+
+.avatar,
+.big-avatar {
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: #38aee0;
+  font-weight: 900;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+}
+
+.reaction-row {
+  margin-top: 12px;
+}
+
+.reaction-row button {
+  min-height: 38px;
+  padding: 8px 11px;
+  color: #1478b7;
+  border-radius: 999px;
+  background: #e7f6ff;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.profile-card {
+  text-align: center;
+}
+
+.big-avatar {
+  width: 78px;
+  height: 78px;
+  margin: 0 auto 10px;
+  border-radius: 28px;
+  font-size: 1.6rem;
+}
+
+.profile-card h2 {
+  margin: 0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.stat-card {
+  min-height: 126px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 12px 8px;
+  text-align: center;
+}
+
+.stat-card svg {
+  color: #148dcc;
+}
+
+.stat-card strong {
+  color: #12344d;
+  font-size: 1.75rem;
+}
+
+.stat-card span {
+  color: #637f91;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.revenue-card {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+}
+
+.revenue-card svg {
+  flex: 0 0 auto;
+  color: #1597d5;
+}
+
+.revenue-card p {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.onboarding-shell {
+  padding-bottom: 0;
+}
+
+.role-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.role-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.role-card {
+  position: relative;
+  min-height: 176px;
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-content: center;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 20px;
+  text-align: left;
+  color: #173b54;
+  border: 1px solid #cdeafa;
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow: 0 15px 38px rgba(27, 107, 155, 0.11);
+}
+
+.role-card strong {
+  font-size: 1.08rem;
+}
+
+.role-card span {
+  grid-column: 2;
+  padding-right: 22px;
+  color: #5d788a;
+  font-size: 0.9rem;
+}
+
+.role-card > svg {
+  position: absolute;
+  right: 18px;
+  color: #75b9df;
+}
+
+.role-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 16px;
+}
+
+.role-icon.teacher {
+  color: #0874b9;
+  background: #dff3ff;
+}
+
+.role-icon.student {
+  color: #28765b;
+  background: #e3f8ec;
+}
+
+.role-form {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #cdeafa;
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow: 0 16px 42px rgba(27, 107, 155, 0.11);
+}
+
+.text-button {
+  width: fit-content;
+  padding: 0;
+  color: #2389c2;
+  background: transparent;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.role-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.role-heading strong,
+.role-heading span {
+  display: block;
+}
+
+.role-heading strong {
+  color: #173b54;
+  font-size: 1.08rem;
+}
+
+.role-heading span {
+  margin-top: 2px;
+  color: #698294;
+  font-size: 0.84rem;
+}
+
+.code-panel {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 18px;
+  color: #426b84;
+  border: 1px dashed #75c4e9;
+  border-radius: 18px;
+  background: #edf9ff;
+}
+
+.code-panel strong,
+.class-code-row strong {
+  color: #0c6fa8;
+  font-size: 1.75rem;
+  letter-spacing: 0.14em;
+}
+
+.code-panel small {
+  text-align: center;
+}
+
+.code-input {
+  text-align: center;
+  font-size: 1.35rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.form-error {
+  margin: -5px 0 0;
+  color: #a34e5a;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.nickname-note {
+  margin: -5px 0 0;
+  color: #668094;
+  font-size: 0.82rem;
+}
+
+.teacher-entry-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.entry-option {
+  min-height: 112px;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-content: center;
+  align-items: center;
+  gap: 3px 11px;
+  padding: 15px;
+  text-align: left;
+  color: #173b54;
+  border: 1px solid #cdeafa;
+  border-radius: 18px;
+  background: #f7fcff;
+}
+
+.entry-option > svg {
+  grid-row: 1 / span 2;
+  color: #148dcc;
+}
+
+.entry-option strong,
+.entry-option span {
+  grid-column: 2;
+}
+
+.entry-option span {
+  color: #698294;
+  font-size: 0.82rem;
+}
+
+.class-banner {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 16px;
+  color: #173b54;
+  border: 1px solid #cdeafa;
+  border-radius: 22px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 109, 158, 0.09);
+}
+
+.class-banner-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.class-banner-top span {
+  color: #4f8eb5;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.class-banner-top h2 {
+  margin: 1px 0 0;
+  font-size: 1.08rem;
+}
+
+.class-banner > p {
+  margin: 0;
+  color: #607d90;
+  font-size: 0.88rem;
+}
+
+.class-code-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 15px;
+  background: #e9f7ff;
+}
+
+.class-code-row span {
+  color: #52778d;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.class-code-row strong {
+  font-size: 1.08rem;
+}
+
+.class-code-row svg {
+  color: #1689cf;
+}
+
+.dashboard-link {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  text-align: left;
+  color: #0874b9;
+  border-radius: 14px;
+  background: #eef9ff;
+  font-size: 0.86rem;
+  font-weight: 900;
+}
+
+.dashboard-code-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  color: #ffffff;
+  border-radius: 22px;
+  background: #137ebc;
+  box-shadow: 0 16px 32px rgba(19, 126, 188, 0.22);
+}
+
+.dashboard-code-card span,
+.dashboard-code-value {
+  display: block;
+}
+
+.dashboard-code-card span {
+  font-size: 0.82rem;
+  font-weight: 800;
+  opacity: 0.82;
+}
+
+.dashboard-code-value {
+  width: 190px;
+  margin-top: 3px;
+  padding: 0;
+  color: #ffffff;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 1.7rem;
+  line-height: 1.25;
+  letter-spacing: 0.14em;
+  font-weight: 900;
+  cursor: text;
+}
+
+.dashboard-code-value:focus {
+  border: 0;
+  box-shadow: none;
+  outline: 0;
+}
+
+.dashboard-code-value::selection {
+  color: #0874b9;
+  background: #ffffff;
+}
+
+.dashboard-code-card button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: #0874b9;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.dashboard-code-card small {
+  position: absolute;
+  right: 16px;
+  bottom: -24px;
+  padding: 5px 9px;
+  color: #126b9f;
+  border-radius: 9px;
+  background: #dff3ff;
+  font-weight: 800;
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.dashboard-stats article {
+  min-height: 112px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 5px;
+  padding: 10px 6px;
+  text-align: center;
+  border: 1px solid #cdeafa;
+  border-radius: 19px;
+  background: #ffffff;
+  box-shadow: 0 10px 25px rgba(23, 109, 158, 0.08);
+}
+
+.dashboard-stats svg {
+  color: #188dca;
+}
+
+.dashboard-stats strong {
+  color: #173b54;
+  font-size: 1.55rem;
+}
+
+.dashboard-stats span {
+  color: #688194;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.dashboard-section {
+  margin-top: 14px;
+  padding: 17px;
+  border: 1px solid #cdeafa;
+  border-radius: 22px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 109, 158, 0.08);
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-title-row span {
+  color: #4c91ba;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.section-title-row h2 {
+  margin: 1px 0 0;
+  color: #173b54;
+  font-size: 1.05rem;
+}
+
+.section-title-row > strong {
+  color: #187eb8;
+  font-size: 0.86rem;
+}
+
+.section-title-row button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 11px;
+  color: #0874b9;
+  border-radius: 12px;
+  background: #e7f6ff;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.member-list,
+.dashboard-quiz-list {
+  display: grid;
+  gap: 8px;
+}
+
+.member-row,
+.dashboard-quiz-list article {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 14px;
+  background: #f4fbff;
+}
+
+.member-row {
+  grid-template-columns: auto 1fr auto;
+}
+
+.member-row > span {
+  color: #418469;
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.dashboard-quiz-list article {
+  grid-template-columns: 1fr auto;
+}
+
+.dashboard-quiz-list strong,
+.dashboard-quiz-list span {
+  display: block;
+}
+
+.dashboard-quiz-list span,
+.dashboard-quiz-list small {
+  color: #688194;
+  font-size: 0.76rem;
+}
+
+.empty-dashboard {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 20px 12px;
+  text-align: center;
+  color: #5f7c90;
+  border-radius: 15px;
+  background: #f2faff;
+}
+
+.empty-dashboard p {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.role-badge {
+  display: inline-block;
+  margin-top: 7px;
+  padding: 4px 10px;
+  color: #0874b9;
+  border-radius: 999px;
+  background: #e1f4ff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.role-reset-button {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: #52778d;
+  border: 1px solid #cde5f2;
+  border-radius: 16px;
+  background: #ffffff;
+  font-weight: 800;
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  z-index: 10;
+  width: min(calc(100% - 24px), 500px);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #cce8f8;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 42px rgba(18, 98, 145, 0.2);
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+.bottom-nav button {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  color: #668397;
+  border-radius: 18px;
+  background: transparent;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.bottom-nav button.active {
+  color: #0874b9;
+  background: #e2f4ff;
+}
+
+@media (min-width: 680px) {
+  .screen {
+    padding-top: 28px;
   }
 }
 
-function waitForRemoteSave(promise) {
-  return Promise.race([
-    promise.catch(console.error),
-    new Promise((resolve) => setTimeout(resolve, 1500)),
-  ]);
-}
-
-function Header({ eyebrow, title, body }) {
-  return h("header", { className: "page-header" },
-    h("div", { className: "brand-mark" }, h(Sparkles, { size: 20 })),
-    h("p", null, eyebrow),
-    h("h1", null, title),
-    body && h("span", null, body)
-  );
-}
-
-function App() {
-  const [screen, setScreen] = useState("home");
-  const [navigationIndex, setNavigationIndex] = useState(0);
-  const [quizzes, setQuizzes] = useState(() => read(STORAGE.quizzes, samples));
-  const [profile, setProfile] = useState(() => read(STORAGE.profile, { name: "匿名ユーザー", createdCount: 0, solvedCount: 0, challengeCount: 0 }));
-  const [comments, setComments] = useState(() => read(STORAGE.comments, sampleComments));
-  const [classes, setClasses] = useState(() => read(STORAGE.classes, []));
-  const [membership, setMembership] = useState(() => read(STORAGE.membership, null));
-  const [activeQuizId, setActiveQuizId] = useState(samples[0].id);
-  const [message, setMessage] = useState("");
-  const [firebaseStatus, setFirebaseStatus] = useState("connecting");
-  const [quizSessionIds, setQuizSessionIds] = useState([]);
-  const [quizSessionPosition, setQuizSessionPosition] = useState(0);
-  const screenRef = useRef("home");
-  const navigationIndexRef = useRef(0);
-
-  useEffect(() => { screenRef.current = screen; }, [screen]);
-  useEffect(() => localStorage.setItem(STORAGE.quizzes, JSON.stringify(quizzes)), [quizzes]);
-  useEffect(() => localStorage.setItem(STORAGE.profile, JSON.stringify(profile)), [profile]);
-  useEffect(() => localStorage.setItem(STORAGE.comments, JSON.stringify(comments)), [comments]);
-  useEffect(() => localStorage.setItem(STORAGE.classes, JSON.stringify(classes)), [classes]);
-  useEffect(() => {
-    if (membership) localStorage.setItem(STORAGE.membership, JSON.stringify(membership));
-    else localStorage.removeItem(STORAGE.membership);
-  }, [membership]);
-  useEffect(() => {
-    if (!membership?.classId) return;
-    setQuizzes((current) => {
-      let changed = false;
-      const migrated = current.map((quiz) => {
-        if (isSampleQuiz(quiz) || quiz.classId) return quiz;
-        changed = true;
-        return { ...quiz, classId: membership.classId };
-      });
-      return changed ? migrated : current;
-    });
-  }, [membership?.classId]);
-  useEffect(() => {
-    let cancelled = false;
-    const unsubscribes = [];
-    const start = async () => {
-      try {
-        await ensureFirebaseReady();
-        if (cancelled) return;
-        if (!localStorage.getItem("qpath.firebaseMigrated")) {
-          await migrateLocalData({ classes, quizzes, comments });
-          localStorage.setItem("qpath.firebaseMigrated", "true");
-        }
-        if (cancelled) return;
-        unsubscribes.push(
-          subscribeClasses(setClasses, () => setFirebaseStatus("error")),
-          subscribeQuizzes(
-            (remoteQuizzes) => setQuizzes([...samples, ...remoteQuizzes.filter((item) => !isSampleQuiz(item))]),
-            () => setFirebaseStatus("error")
-          ),
-          subscribeComments(
-            (remoteComments) => setComments([...sampleComments, ...remoteComments.filter((item) => item.id !== "c1" && item.id !== "c2")]),
-            () => setFirebaseStatus("error")
-          )
-        );
-        setFirebaseStatus("connected");
-      } catch (error) {
-        console.error("Firebase connection failed", error);
-        setFirebaseStatus("error");
-      }
-    };
-    start();
-    return () => {
-      cancelled = true;
-      unsubscribes.forEach((unsubscribe) => unsubscribe());
-    };
-  }, []);
-  useEffect(() => {
-    const baseUrl = `${window.location.pathname}${window.location.search}`;
-    if (membership) {
-      const historyState = window.history.state;
-      if (historyState?.qpath === "app" && historyState.screen) {
-        const restoredIndex = Number.isInteger(historyState.index) ? historyState.index : 0;
-        navigationIndexRef.current = restoredIndex;
-        setNavigationIndex(restoredIndex);
-        setScreen(historyState.screen);
-      } else {
-        navigationIndexRef.current = 0;
-        setNavigationIndex(0);
-        window.history.replaceState(
-          { qpath: "app", screen: screenRef.current, index: 0 },
-          "",
-          `${baseUrl}#${screenRef.current}`
-        );
-      }
-    } else {
-      window.history.replaceState({ qpath: "role" }, "", `${baseUrl}#role`);
-    }
-  }, [membership]);
-  useEffect(() => {
-    const handlePopState = (event) => {
-      if (event.state?.qpath === "app" && event.state.screen) {
-        const restoredIndex = Number.isInteger(event.state.index) ? event.state.index : 0;
-        navigationIndexRef.current = restoredIndex;
-        setNavigationIndex(restoredIndex);
-        setScreen(event.state.screen);
-        return;
-      }
-      if (membership) {
-        const baseUrl = `${window.location.pathname}${window.location.search}`;
-        navigationIndexRef.current = 0;
-        setNavigationIndex(0);
-        setScreen("home");
-        window.history.replaceState(
-          { qpath: "app", screen: "home", index: 0 },
-          "",
-          `${baseUrl}#home`
-        );
-      }
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [membership]);
-
-  const navigateTo = (nextScreen, { replace = false } = {}) => {
-    if (!nextScreen) return;
-    setScreen(nextScreen);
-    screenRef.current = nextScreen;
-    if (!membership) return;
-
-    const baseUrl = `${window.location.pathname}${window.location.search}`;
-    if (!replace && nextScreen === window.history.state?.screen) return;
-    const nextIndex = replace ? navigationIndexRef.current : navigationIndexRef.current + 1;
-    const state = { qpath: "app", screen: nextScreen, index: nextIndex };
-    if (replace) {
-      window.history.replaceState(state, "", `${baseUrl}#${nextScreen}`);
-    } else {
-      window.history.pushState(state, "", `${baseUrl}#${nextScreen}`);
-    }
-    navigationIndexRef.current = nextIndex;
-    setNavigationIndex(nextIndex);
-  };
-
-  const goBackSafely = () => {
-    const historyState = window.history.state;
-    if (historyState?.qpath === "app" && navigationIndexRef.current > 0) {
-      window.history.back();
-      return;
-    }
-    navigateTo("home", { replace: true });
-  };
-
-  const classQuizzes = useMemo(
-    () => membership?.classId ? quizzes.filter((quiz) => belongsToClass(quiz, membership.classId)) : [],
-    [quizzes, membership?.classId]
-  );
-  const classComments = useMemo(
-    () => membership?.classId ? comments.filter((comment) => belongsToClassComment(comment, membership.classId)) : [],
-    [comments, membership?.classId]
-  );
-  const activeQuiz = useMemo(
-    () => classQuizzes.find((quiz) => quiz.id === activeQuizId) || null,
-    [activeQuizId, classQuizzes]
-  );
-  const quizProgress = quizSessionIds[quizSessionPosition] === activeQuizId
-    ? {
-        current: quizSessionPosition + 1,
-        total: quizSessionIds.length,
-        hasNext: quizSessionPosition < quizSessionIds.length - 1,
-      }
-    : null;
-  const activeClass = useMemo(
-    () => classes.find((classroom) => classroom.id === membership?.classId) || null,
-    [classes, membership]
-  );
-  const openQuiz = (id, quizPool = classQuizzes) => {
-    const sessionQuizzes = quizPool.length ? quizPool : classQuizzes;
-    const startIndex = sessionQuizzes.findIndex((quiz) => quiz.id === id);
-    if (startIndex < 0) return;
-    const session = [
-      ...sessionQuizzes.slice(startIndex),
-      ...sessionQuizzes.slice(0, startIndex),
-    ].map((quiz) => quiz.id);
-    setQuizSessionIds(session);
-    setQuizSessionPosition(0);
-    setActiveQuizId(id);
-    navigateTo("answer");
-  };
-  const goToNextQuiz = (wasCorrect) => {
-    const nextSessionIds = wasCorrect ? quizSessionIds : [...quizSessionIds, activeQuizId];
-    const nextPosition = quizSessionPosition + 1;
-    const nextId = nextSessionIds[nextPosition];
-    if (nextId) {
-      setQuizSessionIds(nextSessionIds);
-      setQuizSessionPosition(nextPosition);
-      setActiveQuizId(nextId);
-      navigateTo("answer", { replace: true });
-      return;
-    }
-    setQuizSessionIds([]);
-    setQuizSessionPosition(0);
-    navigateTo("home");
-  };
-  const recordAnswer = (id) => {
-    setQuizzes((list) => list.map((quiz) => quiz.id === id ? { ...quiz, solvedCount: quiz.solvedCount + 1 } : quiz));
-    setProfile((current) => ({ ...current, solvedCount: current.solvedCount + 1, challengeCount: current.challengeCount + 1 }));
-    if (!id.startsWith("sample-")) increaseQuizSolvedCount(id).catch(console.error);
-  };
-  const createQuiz = async (form) => {
-    const quiz = {
-      id: `quiz-${Date.now()}`,
-      title: form.title.trim(),
-      subject: form.subject.trim(),
-      question: form.question.trim(),
-      choices: form.choices.map((choice) => choice.trim()),
-      correctAnswer: form.correctAnswer,
-      explanation: form.explanation.trim(),
-      difficulty: form.difficulty,
-      author: profile.name,
-      classId: membership.classId,
-      solvedCount: 0,
-      likes: 0,
-    };
-    setQuizzes((list) => [quiz, ...list]);
-    await waitForRemoteSave(saveQuiz(quiz));
-    setProfile((current) => ({ ...current, createdCount: current.createdCount + 1 }));
-    setMessage("作問も大切な学びです！");
-    setActiveQuizId(quiz.id);
-    navigateTo("quizzes");
-  };
-
-  const createClass = async ({ name, code, nickname }) => {
-    const classroom = {
-      id: `class-${Date.now()}`,
-      name: name.trim() || "新しいクラス",
-      code,
-      teacher: nickname,
-      teachers: [nickname],
-      members: [],
-      createdAt: new Date().toISOString(),
-    };
-    setProfile((current) => ({ ...current, name: nickname }));
-    setClasses((current) => [classroom, ...current]);
-    await waitForRemoteSave(saveClass(classroom));
-    setMembership({ role: "teacher", classId: classroom.id });
-    setScreen("dashboard");
-    screenRef.current = "dashboard";
-  };
-
-  const joinClass = async (code, nickname) => {
-    const normalized = code.trim().toUpperCase();
-    const classroom = classes.find((item) => item.code === normalized) || await findClassByCode(normalized);
-    if (!classroom) return false;
-    setProfile((current) => ({ ...current, name: nickname }));
-    const updatedClassroom = {
-      ...classroom,
-      members: (classroom.members || []).some((member) => member.name === nickname)
-        ? (classroom.members || [])
-        : [...(classroom.members || []), { id: `member-${Date.now()}`, name: nickname, joinedAt: new Date().toISOString() }],
-    };
-    setClasses((current) => current.map((item) => {
-      if (item.id !== classroom.id) return item;
-      return updatedClassroom;
-    }));
-    await waitForRemoteSave(saveClass(updatedClassroom));
-    setMembership({ role: "student", classId: classroom.id });
-    setScreen("home");
-    screenRef.current = "home";
-    return true;
-  };
-
-  const joinClassAsTeacher = async (code, nickname) => {
-    const normalized = code.trim().toUpperCase();
-    const classroom = classes.find((item) => item.code === normalized) || await findClassByCode(normalized);
-    if (!classroom) return false;
-    setProfile((current) => ({ ...current, name: nickname }));
-    const updatedClassroom = {
-      ...classroom,
-      teachers: (classroom.teachers || [classroom.teacher]).includes(nickname)
-        ? (classroom.teachers || [classroom.teacher])
-        : [...(classroom.teachers || [classroom.teacher]), nickname],
-    };
-    setClasses((current) => current.map((item) => {
-      if (item.id !== classroom.id) return item;
-      return updatedClassroom;
-    }));
-    await waitForRemoteSave(saveClass(updatedClassroom));
-    setMembership({ role: "teacher", classId: classroom.id });
-    setScreen("dashboard");
-    screenRef.current = "dashboard";
-    return true;
-  };
-
-  const resetRole = () => {
-    setMembership(null);
-    setScreen("home");
-    screenRef.current = "home";
-    navigationIndexRef.current = 0;
-    setNavigationIndex(0);
-  };
-
-  useEffect(() => {
-    if (membership && screen === "answer" && !activeQuiz) {
-      navigateTo("home", { replace: true });
-    }
-  }, [screen, activeQuiz, membership]);
-
-  if (!membership) {
-    return h("div", { className: "app-shell onboarding-shell" },
-      h("main", { className: "phone-frame" },
-        h(RoleSetup, { createClass, joinClass, joinClassAsTeacher })
-      )
-    );
+@media (max-width: 380px) {
+  .action-grid,
+  .two-columns,
+  .stats-grid {
+    grid-template-columns: 1fr;
   }
 
-  return h(React.Fragment, null,
-    h("div", { className: "app-shell" },
-      h("main", { className: "phone-frame" },
-        screen !== "home" && h("div", { className: "page-back-row" },
-          h("button", {
-            className: "page-back-button",
-            type: "button",
-            onClick: goBackSafely,
-            "aria-label": "ひとつ前の画面に戻る",
-            title: "戻る",
-          }, h(ArrowLeft, { size: 21 }), h("span", null, "戻る"))
-        ),
-        firebaseStatus === "error" && h("div", { className: "sync-notice" }, "オンライン同期を確認できません。Firebaseの設定を確認してください。"),
-        (screen === "home" || (screen === "answer" && !activeQuiz)) && h(HomeScreen, { setScreen: navigateTo, membership, activeClass }),
-        screen === "quizzes" && h(QuizList, { quizzes: classQuizzes, openQuiz, message, clearMessage: () => setMessage("") }),
-        screen === "answer" && activeQuiz && h(AnswerScreen, {
-          quiz: activeQuiz,
-          recordAnswer,
-          quizProgress,
-          goToNextQuiz,
-        }),
-        screen === "create" && h(CreateScreen, { createQuiz }),
-        screen === "study" && h(StudyScreen, {
-          comments: classComments,
-          addComment: (text) => {
-            const comment = {
-              id: `comment-${Date.now()}`,
-              author: profile.name,
-              text,
-              classId: membership.classId,
-              reactions: { clear: 0, retry: 0, good: 0 },
-            };
-            setComments((current) => [comment, ...current]);
-            saveComment(comment).catch(console.error);
-          },
-          reactToComment: (id, key) => {
-            setComments((current) => current.map((comment) => {
-              if (comment.id !== id) return comment;
-              const updated = {
-                ...comment,
-                reactions: { ...comment.reactions, [key]: comment.reactions[key] + 1 },
-              };
-              if (id !== "c1" && id !== "c2") saveComment(updated).catch(console.error);
-              return updated;
-            }));
-          },
-        }),
-        screen === "profile" && h(ProfileScreen, { profile, membership, activeClass, resetRole, setScreen: navigateTo }),
-        screen === "dashboard" && membership.role === "teacher" && h(TeacherDashboard, {
-          activeClass,
-          quizzes: classQuizzes,
-          setScreen: navigateTo,
-        })
-      )
-    ),
-    h(BottomNav, { current: screen, setScreen: navigateTo })
-  );
+  .role-card {
+    min-height: 164px;
+  }
+
+  .dashboard-stats {
+    gap: 6px;
+  }
+
+  .bottom-nav span {
+    font-size: 0.68rem;
+  }
 }
-
-function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
-  const [role, setRole] = useState("");
-  const [step, setStep] = useState("role");
-  const [nickname, setNickname] = useState("");
-  const [className, setClassName] = useState("");
-  const [classCode, setClassCode] = useState("");
-  const [joinCode, setJoinCode] = useState("");
-  const [teacherAction, setTeacherAction] = useState("");
-  const [error, setError] = useState("");
-
-  const chooseRole = (nextRole) => {
-    setRole(nextRole);
-    setStep("nickname");
-    setError("");
-    if (nextRole === "teacher") setClassCode(generateClassCode());
-  };
-
-  const submitJoin = async (event) => {
-    event.preventDefault();
-    const joined = role === "teacher"
-      ? await joinClassAsTeacher(joinCode, nickname.trim())
-      : await joinClass(joinCode, nickname.trim());
-    if (!joined) {
-      setError("クラスが見つかりません。コードをもう一度確認してください。");
-    }
-  };
-
-  return h("section", { className: "screen role-screen" },
-    h(Header, {
-      eyebrow: "Welcome to qpath",
-      title: "どちらの立場で学びますか？",
-      body: "役割はあとからプロフィールで選び直せます。",
-    }),
-    step === "role" && h("div", { className: "role-grid" },
-      h("button", { className: "role-card", onClick: () => chooseRole("teacher") },
-        h("div", { className: "role-icon teacher" }, h(School, { size: 30 })),
-        h("strong", null, "教員としてはじめる"),
-        h("span", null, "クラスを作成して、参加コードを生徒に共有します。"),
-        h(ChevronRight, { size: 20 })
-      ),
-      h("button", { className: "role-card", onClick: () => chooseRole("student") },
-        h("div", { className: "role-icon student" }, h(GraduationCap, { size: 30 })),
-        h("strong", null, "生徒としてはじめる"),
-        h("span", null, "先生から受け取ったコードでクラスに参加します。"),
-        h(ChevronRight, { size: 20 })
-      )
-    ),
-    step === "nickname" && h("form", {
-      className: "role-form",
-      onSubmit: (event) => {
-        event.preventDefault();
-        if (nickname.trim()) setStep(role === "teacher" ? "teacher-choice" : "class");
-      },
-    },
-      h("button", {
-        type: "button",
-        className: "text-button",
-        onClick: () => {
-          setRole("");
-          setStep("role");
-        },
-      }, "役割選択に戻る"),
-      h("div", { className: "role-heading" },
-        h("div", { className: `role-icon ${role}` },
-          h(role === "teacher" ? School : GraduationCap, { size: 26 })
-        ),
-        h("div", null,
-          h("strong", null, "ニックネームを設定"),
-          h("span", null, "クラス内で表示される名前です")
-        )
-      ),
-      field("ニックネーム", h("input", {
-        value: nickname,
-        onChange: (event) => setNickname(event.target.value.slice(0, 20)),
-        placeholder: role === "teacher" ? "例：さとう先生" : "例：あおい",
-        maxLength: 20,
-        autoFocus: true,
-        required: true,
-      })),
-      h("p", { className: "nickname-note" }, "本名でなくても大丈夫です。あとから選び直せます。"),
-      h("button", { className: "primary-button", type: "submit", disabled: !nickname.trim() },
-        "次へ",
-        h(ChevronRight, { size: 18 })
-      )
-    ),
-    step === "teacher-choice" && role === "teacher" && h("div", { className: "role-form" },
-      h("button", { type: "button", className: "text-button", onClick: () => setStep("nickname") }, "ニックネーム設定に戻る"),
-      h("div", { className: "role-heading" },
-        h("div", { className: "role-icon teacher" }, h(School, { size: 26 })),
-        h("div", null,
-          h("strong", null, "クラスへの入り方を選択"),
-          h("span", null, "新しく作るか、既存クラスへ参加できます")
-        )
-      ),
-      h("div", { className: "teacher-entry-grid" },
-        h("button", {
-          type: "button",
-          className: "entry-option",
-          onClick: () => {
-            setTeacherAction("create");
-            setStep("class");
-          },
-        },
-          h(Plus, { size: 23 }),
-          h("strong", null, "新しいクラスを作る"),
-          h("span", null, "参加コードを発行します")
-        ),
-        h("button", {
-          type: "button",
-          className: "entry-option",
-          onClick: () => {
-            setTeacherAction("join");
-            setStep("class");
-          },
-        },
-          h(KeyRound, { size: 23 }),
-          h("strong", null, "コードでクラスに入る"),
-          h("span", null, "共同教員として参加します")
-        )
-      )
-    ),
-    step === "class" && role === "teacher" && teacherAction === "create" && h("form", {
-      className: "role-form",
-      onSubmit: (event) => {
-        event.preventDefault();
-        createClass({ name: className, code: classCode, nickname: nickname.trim() });
-      },
-    },
-      h("button", { type: "button", className: "text-button", onClick: () => setStep("teacher-choice") }, "入り方の選択に戻る"),
-      h("div", { className: "role-heading" },
-        h("div", { className: "role-icon teacher" }, h(School, { size: 26 })),
-        h("div", null, h("strong", null, "教員用クラスを作成"), h("span", null, "クラスコードを発行しました"))
-      ),
-      field("クラス名", h("input", {
-        value: className,
-        onChange: (event) => setClassName(event.target.value),
-        placeholder: "例：2年3組 数学",
-        required: true,
-      })),
-      h("div", { className: "code-panel" },
-        h("span", null, "クラスコード"),
-        h("strong", null, classCode),
-        h("small", null, "作成後、このコードを生徒に共有してください")
-      ),
-      h("button", { className: "primary-button", type: "submit" }, h(Plus, { size: 18 }), "クラスを作成")
-    ),
-    step === "class" && (role === "student" || teacherAction === "join") && h("form", { className: "role-form", onSubmit: submitJoin },
-      h("button", {
-        type: "button",
-        className: "text-button",
-        onClick: () => setStep(role === "teacher" ? "teacher-choice" : "nickname"),
-      }, role === "teacher" ? "入り方の選択に戻る" : "ニックネーム設定に戻る"),
-      h("div", { className: "role-heading" },
-        h("div", { className: `role-icon ${role}` }, h(KeyRound, { size: 26 })),
-        h("div", null,
-          h("strong", null, role === "teacher" ? "教員としてクラスに参加" : "クラスに参加"),
-          h("span", null, "共有された6文字のコードを入力")
-        )
-      ),
-      field("クラスコード", h("input", {
-        className: "code-input",
-        value: joinCode,
-        onChange: (event) => {
-          setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
-          setError("");
-        },
-        placeholder: "ABC234",
-        maxLength: 6,
-        autoCapitalize: "characters",
-        required: true,
-      })),
-      error && h("p", { className: "form-error" }, error),
-      h("button", { className: "primary-button", type: "submit", disabled: joinCode.length !== 6 },
-        role === "teacher" ? "教員として参加" : "クラスに参加"
-      )
-    )
-  );
-}
-
-function ClassBanner({ membership, activeClass, setScreen }) {
-  if (!activeClass) return null;
-  const isTeacher = membership.role === "teacher";
-  return h("article", { className: "class-banner" },
-    h("div", { className: "class-banner-top" },
-      h("div", { className: `role-icon ${isTeacher ? "teacher" : "student"}` },
-        h(isTeacher ? School : GraduationCap, { size: 22 })
-      ),
-      h("div", null,
-        h("span", null, isTeacher ? "教員" : "生徒"),
-        h("h2", null, activeClass.name)
-      )
-    ),
-    isTeacher
-      ? h(React.Fragment, null,
-          h("div", { className: "class-code-row" },
-            h("span", null, "参加コード"),
-            h("strong", null, activeClass.code),
-            h(Clipboard, { size: 18 })
-          ),
-          setScreen && h("button", { className: "dashboard-link", onClick: () => setScreen("dashboard") },
-            h(ChartNoAxesColumnIncreasing, { size: 18 }),
-            "クラスのダッシュボードを見る",
-            h(ChevronRight, { size: 18 })
-          )
-        )
-      : h("p", null, `${activeClass.teacher} のクラスに参加中`)
-  );
-}
-
-function TeacherDashboard({ activeClass, quizzes, setScreen }) {
-  const [copyStatus, setCopyStatus] = useState("");
-  const codeInputRef = useRef(null);
-  if (!activeClass) return null;
-  const members = activeClass.members || [];
-  const challengeTotal = quizzes.reduce((total, quiz) => total + quiz.solvedCount, 0);
-
-  const copyCode = () => {
-    const codeInput = codeInputRef.current;
-    let legacyCopied = false;
-
-    if (codeInput) {
-      codeInput.focus();
-      codeInput.select();
-      codeInput.setSelectionRange(0, codeInput.value.length);
-      try {
-        legacyCopied = document.execCommand("copy");
-      } catch {
-        legacyCopied = false;
-      }
-    }
-
-    const showResult = (succeeded) => {
-      setCopyStatus(succeeded ? "コピーしました" : "コードを選択しました。コピーしてください");
-      setTimeout(() => setCopyStatus(""), 2200);
-    };
-
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(activeClass.code)
-          .then(() => showResult(true))
-          .catch(() => showResult(legacyCopied));
-        return;
-      }
-    } catch {}
-
-    showResult(legacyCopied);
-  };
-
-  return h("section", { className: "screen" },
-    h(Header, {
-      eyebrow: "Class dashboard",
-      title: activeClass.name,
-      body: `${activeClass.teacher}・教員用ダッシュボード`,
-    }),
-    h("article", { className: "dashboard-code-card" },
-      h("div", null,
-        h("span", null, "生徒の参加コード"),
-        h("input", {
-          ref: codeInputRef,
-          className: "dashboard-code-value",
-          value: activeClass.code,
-          readOnly: true,
-          "aria-label": "生徒の参加コード",
-          onClick: (event) => event.currentTarget.select(),
-        })
-      ),
-      h("button", {
-        type: "button",
-        onClick: copyCode,
-        title: "コードをコピー",
-        "aria-label": "参加コードをコピー",
-      },
-        copyStatus === "コピーしました" ? h(CheckCircle2, { size: 20 }) : h(Clipboard, { size: 20 })
-      ),
-      copyStatus && h("small", { role: "status" }, copyStatus)
-    ),
-    h("div", { className: "dashboard-stats" },
-      h(DashboardStat, { icon: Users, value: members.length, label: "参加生徒" }),
-      h(DashboardStat, { icon: BookOpen, value: quizzes.length, label: "クイズ" }),
-      h(DashboardStat, { icon: Trophy, value: challengeTotal, label: "挑戦回数" })
-    ),
-    h("section", { className: "dashboard-section" },
-      h("div", { className: "section-title-row" },
-        h("div", null, h("span", null, "Students"), h("h2", null, "参加している生徒")),
-        h("strong", null, `${members.length}人`)
-      ),
-      members.length
-        ? h("div", { className: "member-list" },
-            members.map((member) => h("div", { className: "member-row", key: member.id },
-              h("div", { className: "avatar" }, member.name.slice(0, 1)),
-              h("strong", null, member.name),
-              h("span", null, "参加中")
-            ))
-          )
-        : h("div", { className: "empty-dashboard" },
-            h(Users, { size: 25 }),
-            h("strong", null, "まだ参加者はいません"),
-            h("p", null, "上のクラスコードを生徒に共有してください。")
-          )
-    ),
-    h("section", { className: "dashboard-section" },
-      h("div", { className: "section-title-row" },
-        h("div", null, h("span", null, "Quizzes"), h("h2", null, "最近のクイズ")),
-        h("button", { onClick: () => setScreen("create") }, h(Plus, { size: 17 }), "作問")
-      ),
-      h("div", { className: "dashboard-quiz-list" },
-        quizzes.slice(0, 3).map((quiz) => h("article", { key: quiz.id },
-          h("div", null, h("strong", null, quiz.title), h("span", null, `${quiz.subject}・${quiz.difficulty}`)),
-          h("small", null, `${quiz.solvedCount}回挑戦`)
-        ))
-      )
-    )
-  );
-}
-
-function DashboardStat({ icon, value, label }) {
-  return h("article", null, h(icon, { size: 20 }), h("strong", null, value), h("span", null, label));
-}
-
-function HomeScreen({ setScreen, membership, activeClass }) {
-  const actions = [
-    ["クイズを解く", "4択で気軽に挑戦", BookOpen, "quizzes"],
-    ["クイズを作る", "理解を形にする", PencilLine, "create"],
-    ["相互学習", "コメントで学び合う", Users, "study"],
-    ["プロフィール", "正解数より挑戦数", CircleUserRound, "profile"],
-  ];
-  return h("section", { className: "screen home-screen" },
-    h(Header, { eyebrow: "qpath", title: "「間違えて良い」から始まる学び", body: "挑戦・作問・相互学習を大切にするクイズ共有プロトタイプ" }),
-    h(ClassBanner, { membership, activeClass, setScreen }),
-    h("div", { className: "hero-card" },
-      h("div", null, h("strong", null, "今日の合言葉"), h("p", null, "挑戦したことが学びです。ここから理解が深まります。")),
-      h(Lightbulb, { size: 36 })
-    ),
-    h("div", { className: "action-grid" },
-      actions.map(([label, detail, Icon, target]) =>
-        h("button", { className: "action-card", key: label, onClick: () => setScreen(target) },
-          h(Icon, { size: 24 }), h("span", null, label), h("small", null, detail), h(ChevronRight, { size: 18 })
-        )
-      )
-    )
-  );
-}
-
-function QuizList({ quizzes, openQuiz, message, clearMessage }) {
-  const [selectedSubject, setSelectedSubject] = useState("");
-  const subjectGroups = useMemo(() => getSubjectGroups(quizzes), [quizzes]);
-  const visibleQuizzes = selectedSubject
-    ? quizzes.filter((quiz) => quiz.subject === selectedSubject)
-    : quizzes;
-  useEffect(() => {
-    if (selectedSubject && !subjectGroups.some((group) => group.subject === selectedSubject)) {
-      setSelectedSubject("");
-    }
-  }, [selectedSubject, subjectGroups]);
-
-  return h("section", { className: "screen" },
-    h(Header, {
-      eyebrow: "Quiz",
-      title: "クイズ一覧",
-      body: selectedSubject
-        ? `${selectedSubject}の問題群だけで挑戦できます。`
-        : "教科ごとの問題群を選んで、まずは一問だけ挑戦。"
-    }),
-    message && h("button", { className: "notice", onClick: clearMessage }, h(CheckCircle2, { size: 18 }), message),
-    h("div", { className: "subject-filter", "aria-label": "教科で問題群を選ぶ" },
-      h("button", {
-        className: `subject-filter-button ${selectedSubject === "" ? "active" : ""}`,
-        type: "button",
-        onClick: () => setSelectedSubject(""),
-      }, `すべて ${quizzes.length}`),
-      subjectGroups.map((group) =>
-        h("button", {
-          className: `subject-filter-button ${selectedSubject === group.subject ? "active" : ""}`,
-          type: "button",
-          key: group.subject,
-          onClick: () => setSelectedSubject(group.subject),
-        }, `${group.subject} ${group.count}`)
-      )
-    ),
-    h("div", { className: "quiz-list" },
-      visibleQuizzes.length === 0 && h("article", { className: "empty-card" },
-        h("strong", null, "この問題群にはまだクイズがありません"),
-        h("p", null, "作問も大切な学びです。最初の一問を作ってみましょう。")
-      ),
-      visibleQuizzes.map((quiz) =>
-        h("article", { className: "quiz-card", key: quiz.id },
-          h("div", { className: "card-top" }, h("span", { className: "subject" }, quiz.subject), h("span", { className: `difficulty ${quiz.difficulty}` }, quiz.difficulty)),
-          h("h2", null, quiz.title),
-          h("p", null, quiz.question),
-          h("div", { className: "meta-row" }, h("span", null, quiz.author), h("span", null, `${quiz.solvedCount} 回挑戦`), h("span", null, `${quiz.likes} いい問題`)),
-          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id, visibleQuizzes) }, "挑戦する")
-        )
-      )
-    )
-  );
-}
-
-function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
-  const [selected, setSelected] = useState("");
-  const [result, setResult] = useState(null);
-  const retryCurrentQuiz = () => {
-    setSelected("");
-    setResult(null);
-  };
-  useEffect(() => { retryCurrentQuiz(); }, [quiz.id, quizProgress?.current]);
-  const submit = () => {
-    setResult({ isCorrect: selected === quiz.correctAnswer });
-    recordAnswer(quiz.id);
-  };
-  return h("section", { className: "screen" },
-    h(Header, { eyebrow: quiz.subject, title: quiz.title, body: `${quiz.difficulty}・${quiz.author}` }),
-    h("article", { className: "answer-card" },
-      quizProgress && h("p", { className: "session-progress" }, `${quizProgress.current} / ${quizProgress.total} 問目`),
-      h("p", { className: "question-text" }, quiz.question),
-      h("div", { className: "choice-list" },
-        quiz.choices.map((choice, index) =>
-          h("button", {
-            className: `choice-button ${selected === choice ? "selected" : ""} ${result && choice === quiz.correctAnswer ? "correct" : ""}`,
-            key: choice,
-            onClick: () => !result && setSelected(choice),
-            disabled: !!result,
-          }, h("span", null, String.fromCharCode(65 + index)), choice)
-        )
-      ),
-      !result
-        ? h("button", { className: "primary-button", disabled: !selected, onClick: submit }, "回答する")
-        : h("div", { className: `result-box ${result.isCorrect ? "positive" : "learning"}` },
-          h("strong", null, result.isCorrect ? "正解です！" : "不正解でも、間違えて良い。ここから学べます"),
-          !result.isCorrect && h("p", null, "挑戦したことが学びです。ここから理解が深まります。"),
-          h("div", { className: "explanation" }, h("span", null, "解説"), h("p", null, quiz.explanation)),
-          quizProgress && !quizProgress.hasNext && result.isCorrect && h("p", { className: "complete-message" }, "解き始めた時点の問題をすべて挑戦しました。挑戦したことが学びです。"),
-          h("div", { className: "answer-actions" },
-            (result.isCorrect || quizProgress?.hasNext) &&
-              h("button", { className: "secondary-button", onClick: retryCurrentQuiz }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
-            h("button", {
-              className: "primary-button",
-              onClick: () => !result.isCorrect && !quizProgress?.hasNext
-                ? retryCurrentQuiz()
-                : goToNextQuiz(result.isCorrect),
-            },
-              quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度挑戦する",
-              h(ChevronRight, { size: 18 })
-            )
-          )
-        )
-    )
-  );
-}
-
-function CreateScreen({ createQuiz }) {
-  const initial = { title: "", subject: "", question: "", choices: ["", "", "", ""], correctAnswer: "", explanation: "", difficulty: "普通" };
-  const [form, setForm] = useState(initial);
-  const [note, setNote] = useState("");
-  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
-  const updateChoice = (index, value) => setForm((current) => {
-    const choices = [...current.choices];
-    const old = choices[index];
-    choices[index] = value;
-    return { ...current, choices, correctAnswer: current.correctAnswer === old ? value : current.correctAnswer };
-  });
-  const canSubmit = form.title.trim() && form.subject.trim() && form.question.trim() && form.choices.every((choice) => choice.trim()) && form.correctAnswer && form.explanation.trim();
-  const submit = (event) => {
-    event.preventDefault();
-    if (!canSubmit) {
-      setNote("入力できるところから整えていきましょう。");
-      return;
-    }
-    createQuiz(form);
-    setForm(initial);
-  };
-  return h("section", { className: "screen" },
-    h(Header, { eyebrow: "Create", title: "クイズを作る", body: "作問も大切な学びです。考えた道すじを解説に残そう。" }),
-    h("form", { className: "form-card", onSubmit: submit },
-      field("タイトル", h("input", { value: form.title, onChange: (e) => update("title", e.target.value), placeholder: "例：比例の基本" })),
-      h("div", { className: "two-columns" },
-        field("教科", h("select", { value: form.subject, onChange: (e) => update("subject", e.target.value) },
-          h("option", { value: "" }, "選択してください"),
-          SUBJECT_OPTIONS.map((subject) => h("option", { value: subject, key: subject }, subject))
-        )),
-        field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい")))
-      ),
-      field("問題文", h("textarea", { value: form.question, onChange: (e) => update("question", e.target.value), placeholder: "問題文を入力", rows: 3 })),
-      h("div", { className: "choice-editor" },
-        h("span", null, "選択肢 A〜D"),
-        form.choices.map((choice, index) => h("label", { className: "choice-input", key: index }, String.fromCharCode(65 + index), h("input", { value: choice, onChange: (e) => updateChoice(index, e.target.value), placeholder: `選択肢${String.fromCharCode(65 + index)}` })))
-      ),
-      field("正解", h("select", { value: form.correctAnswer, onChange: (e) => update("correctAnswer", e.target.value) },
-        h("option", { value: "" }, "選択してください"),
-        form.choices.map((choice, index) => h("option", { value: choice, key: index, disabled: !choice.trim() }, `${String.fromCharCode(65 + index)}: ${choice || "未入力"}`))
-      )),
-      field("解説", h("textarea", { value: form.explanation, onChange: (e) => update("explanation", e.target.value), placeholder: "考え方や覚え方を書いてください", rows: 4 })),
-      note && h("p", { className: "soft-message" }, note),
-      h("button", { className: "primary-button", type: "submit" }, h(Plus, { size: 18 }), "作成して共有")
-    ),
-    h(RevenueCard)
-  );
-}
-
-function field(label, control) {
-  return h("label", null, label, control);
-}
-
-function StudyScreen({ comments, addComment: onAddComment, reactToComment }) {
-  const [text, setText] = useState("");
-  const submitComment = () => {
-    if (!text.trim()) return;
-    onAddComment(text.trim());
-    setText("");
-  };
-  return h("section", { className: "screen" },
-    h(Header, { eyebrow: "Mutual Learning", title: "相互学習", body: "感じたことを残すと、次の人の学びになります。" }),
-    h("div", { className: "comment-box" },
-      h("textarea", { value: text, onChange: (e) => setText(e.target.value), placeholder: "解き方の気づきや、もう一回挑戦したい理由を書いてみよう", rows: 3 }),
-      h("button", { className: "primary-button", onClick: submitComment }, h(Send, { size: 17 }), "投稿")
-    ),
-    h("div", { className: "comment-list" },
-      comments.map((comment) =>
-        h("article", { className: "comment-card", key: comment.id },
-          h("div", { className: "avatar-row" }, h("div", { className: "avatar" }, "匿"), h("strong", null, comment.author)),
-          h("p", null, comment.text),
-          h("div", { className: "reaction-row" },
-            h("button", { onClick: () => reactToComment(comment.id, "clear") }, `わかりやすい ${comment.reactions.clear}`),
-            h("button", { onClick: () => reactToComment(comment.id, "retry") }, `もう一回挑戦したい ${comment.reactions.retry}`),
-            h("button", { onClick: () => reactToComment(comment.id, "good") }, `いい問題 ${comment.reactions.good}`)
-          )
-        )
-      )
-    )
-  );
-}
-
-function ProfileScreen({ profile, membership, activeClass, resetRole, setScreen }) {
-  const roleLabel = membership.role === "teacher" ? "教員" : "生徒";
-  return h("section", { className: "screen" },
-    h(Header, { eyebrow: "Profile", title: "プロフィール", body: "正解数より挑戦数を見えるようにしています。" }),
-    h("article", { className: "profile-card" },
-      h("div", { className: "big-avatar" }, "匿"),
-      h("h2", null, profile.name),
-      h("span", { className: "role-badge" }, roleLabel),
-      h("p", null, "正解数より、挑戦した数を大切にしています")
-    ),
-    h(ClassBanner, { membership, activeClass, setScreen }),
-    h("div", { className: "stats-grid" },
-      h(Stat, { label: "作成したクイズ数", value: profile.createdCount, icon: Edit3 }),
-      h(Stat, { label: "解いたクイズ数", value: profile.solvedCount, icon: BookOpen }),
-      h(Stat, { label: "挑戦回数", value: profile.challengeCount, icon: Trophy })
-    ),
-    h(RevenueCard),
-    h("button", { className: "role-reset-button", onClick: resetRole },
-      h(LogOut, { size: 17 }),
-      "役割とクラスを選び直す"
-    )
-  );
-}
-
-function Stat({ label, value, icon }) {
-  return h("article", { className: "stat-card" }, h(icon, { size: 20 }), h("strong", null, value), h("span", null, label));
-}
-
-function RevenueCard() {
-  return h("article", { className: "revenue-card" }, h(Heart, { size: 22 }), h("p", null, "将来的には、多くの人に解かれた良質なクイズを作成したユーザーに、収益を分配する仕組みを導入予定です。"));
-}
-
-function BottomNav({ current, setScreen }) {
-  const items = [
-    ["profile", "プロフィール", CircleUserRound],
-    ["quizzes", "クイズ", BookOpen],
-    ["study", "自習", MessageCircle],
-    ["create", "作問", PencilLine],
-  ];
-  return h("nav", { className: "bottom-nav" },
-    items.map(([key, label, Icon]) => {
-      const active =
-        current === key ||
-        (key === "quizzes" && current === "answer") ||
-        (key === "profile" && current === "dashboard");
-      return h("button", { key, className: active ? "active" : "", onClick: () => setScreen(key) }, h(Icon, { size: 21 }), h("span", null, label));
-    })
-  );
-}
-
-createRoot(document.getElementById("root")).render(h(App));

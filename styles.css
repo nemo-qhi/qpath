@@ -303,6 +303,15 @@ function App() {
     setNavigationIndex(nextIndex);
   };
 
+  const goBackSafely = () => {
+    const historyState = window.history.state;
+    if (historyState?.qpath === "app" && navigationIndexRef.current > 0) {
+      window.history.back();
+      return;
+    }
+    navigateTo("home", { replace: true });
+  };
+
   const classQuizzes = useMemo(
     () => membership?.classId ? quizzes.filter((quiz) => belongsToClass(quiz, membership.classId)) : [],
     [quizzes, membership?.classId]
@@ -352,7 +361,6 @@ function App() {
     }
     setQuizSessionIds([]);
     setQuizSessionPosition(0);
-    setActiveQuizId("");
     navigateTo("home");
   };
   const recordAnswer = (id) => {
@@ -453,6 +461,12 @@ function App() {
     setNavigationIndex(0);
   };
 
+  useEffect(() => {
+    if (membership && screen === "answer" && !activeQuiz) {
+      navigateTo("home", { replace: true });
+    }
+  }, [screen, activeQuiz, membership]);
+
   if (!membership) {
     return h("div", { className: "app-shell onboarding-shell" },
       h("main", { className: "phone-frame" },
@@ -464,17 +478,17 @@ function App() {
   return h(React.Fragment, null,
     h("div", { className: "app-shell" },
       h("main", { className: "phone-frame" },
-        navigationIndex > 0 && h("div", { className: "page-back-row" },
+        screen !== "home" && h("div", { className: "page-back-row" },
           h("button", {
             className: "page-back-button",
             type: "button",
-            onClick: () => window.history.back(),
+            onClick: goBackSafely,
             "aria-label": "ひとつ前の画面に戻る",
             title: "戻る",
           }, h(ArrowLeft, { size: 21 }), h("span", null, "戻る"))
         ),
         firebaseStatus === "error" && h("div", { className: "sync-notice" }, "オンライン同期を確認できません。Firebaseの設定を確認してください。"),
-        screen === "home" && h(HomeScreen, { setScreen: navigateTo, membership, activeClass }),
+        (screen === "home" || (screen === "answer" && !activeQuiz)) && h(HomeScreen, { setScreen: navigateTo, membership, activeClass }),
         screen === "quizzes" && h(QuizList, { quizzes: classQuizzes, openQuiz, message, clearMessage: () => setMessage("") }),
         screen === "answer" && activeQuiz && h(AnswerScreen, {
           quiz: activeQuiz,
@@ -994,13 +1008,18 @@ function CreateScreen({ createQuiz }) {
     h(Header, { eyebrow: "Create", title: "クイズを作る", body: "作問も大切な学びです。考えた道すじを解説に残そう。" }),
     h("form", { className: "form-card", onSubmit: submit },
       field("タイトル", h("input", { value: form.title, onChange: (e) => update("title", e.target.value), placeholder: "例：比例の基本" })),
-      h("div", { className: "two-columns" },
-        field("教科", h("select", { value: form.subject, onChange: (e) => update("subject", e.target.value) },
-          h("option", { value: "" }, "選択してください"),
-          SUBJECT_OPTIONS.map((subject) => h("option", { value: subject, key: subject }, subject))
-        )),
-        field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい")))
-      ),
+      field("教科", h("select", {
+        className: "subject-select",
+        name: "subject",
+        value: form.subject,
+        onChange: (e) => update("subject", e.target.value),
+        required: true,
+        "aria-label": "教科を選択",
+      },
+        h("option", { value: "", disabled: true }, "教科を選択してください"),
+        SUBJECT_OPTIONS.map((subject) => h("option", { value: subject, key: subject }, subject))
+      )),
+      field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい"))),
       field("問題文", h("textarea", { value: form.question, onChange: (e) => update("question", e.target.value), placeholder: "問題文を入力", rows: 3 })),
       h("div", { className: "choice-editor" },
         h("span", null, "選択肢 A〜D"),
