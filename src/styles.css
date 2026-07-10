@@ -39,6 +39,29 @@ button {
   margin: 0 auto;
 }
 
+.page-back-row {
+  padding: 12px 16px 0;
+}
+
+.page-back-button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 13px 0 11px;
+  color: #176f9f;
+  border: 1px solid #c7e7f7;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 7px 18px rgba(31, 119, 164, 0.1);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.page-back-button:active {
+  background: #e7f6ff;
+}
+
 .screen {
   min-height: calc(100vh - 86px);
   padding: 20px 16px 24px;
@@ -100,7 +123,8 @@ button {
 .comment-card,
 .profile-card,
 .stat-card,
-.revenue-card {
+.revenue-card,
+.empty-card {
   border: 1px solid #cdeafa;
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.94);
@@ -178,8 +202,51 @@ button {
   gap: 14px;
 }
 
+.subject-filter {
+  display: flex;
+  gap: 8px;
+  margin: -2px -16px 14px;
+  padding: 2px 16px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.subject-filter::-webkit-scrollbar {
+  display: none;
+}
+
+.subject-filter-button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 13px;
+  color: #176f9f;
+  border: 1px solid #c7e7f7;
+  border-radius: 999px;
+  background: #ffffff;
+  font-weight: 900;
+  white-space: nowrap;
+  box-shadow: 0 7px 18px rgba(31, 119, 164, 0.08);
+}
+
+.subject-filter-button.active {
+  color: #ffffff;
+  border-color: #1597d5;
+  background: linear-gradient(135deg, #1597d5, #35b9e8);
+  box-shadow: 0 10px 22px rgba(20, 143, 207, 0.2);
+}
+
 .quiz-card {
   padding: 18px;
+}
+
+.empty-card {
+  padding: 18px;
+  color: #24465d;
+}
+
+.empty-card p {
+  margin-bottom: 0;
+  color: #526b7d;
 }
 
 .card-top,
@@ -427,6 +494,18 @@ textarea:focus,
 select:focus {
   border-color: #2aa7dc;
   box-shadow: 0 0 0 4px rgba(42, 167, 220, 0.14);
+}
+
+.subject-select {
+  min-height: 52px;
+  border-width: 2px;
+  background-color: #f7fcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.subject-select:invalid {
+  color: #60798b;
 }
 
 .two-columns {

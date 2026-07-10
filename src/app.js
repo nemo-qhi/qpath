@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ArrowLeft,
   BookOpen,
   ChartNoAxesColumnIncreasing,
   CheckCircle2,
@@ -44,6 +45,23 @@ const STORAGE = {
   membership: "qpath.membership",
   classes: "qpath.classes",
 };
+
+const SUBJECT_OPTIONS = ["国語", "数学", "化学", "生物", "物理", "地学", "日本史", "世界史", "公民", "地理", "英語", "その他"];
+const SUBJECT_ORDER = new Map(SUBJECT_OPTIONS.map((subject, index) => [subject, index]));
+
+function getSubjectGroups(quizzes) {
+  const counts = quizzes.reduce((items, quiz) => {
+    const subject = quiz.subject || "その他";
+    items.set(subject, (items.get(subject) || 0) + 1);
+    return items;
+  }, new Map());
+  return Array.from(counts, ([subject, count]) => ({ subject, count }))
+    .sort((a, b) => {
+      const aIndex = SUBJECT_ORDER.has(a.subject) ? SUBJECT_ORDER.get(a.subject) : SUBJECT_OPTIONS.length;
+      const bIndex = SUBJECT_ORDER.has(b.subject) ? SUBJECT_ORDER.get(b.subject) : SUBJECT_OPTIONS.length;
+      return aIndex === bIndex ? a.subject.localeCompare(b.subject, "ja") : aIndex - bIndex;
+    });
+}
 
 function generateClassCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -149,6 +167,7 @@ function Header({ eyebrow, title, body }) {
 
 function App() {
   const [screen, setScreen] = useState("home");
+  const [navigationIndex, setNavigationIndex] = useState(0);
   const [quizzes, setQuizzes] = useState(() => read(STORAGE.quizzes, samples));
   const [profile, setProfile] = useState(() => read(STORAGE.profile, { name: "匿名ユーザー", createdCount: 0, solvedCount: 0, challengeCount: 0 }));
   const [comments, setComments] = useState(() => read(STORAGE.comments, sampleComments));
@@ -159,7 +178,10 @@ function App() {
   const [firebaseStatus, setFirebaseStatus] = useState("connecting");
   const [quizSessionIds, setQuizSessionIds] = useState([]);
   const [quizSessionPosition, setQuizSessionPosition] = useState(0);
+  const screenRef = useRef("home");
+  const navigationIndexRef = useRef(0);
 
+  useEffect(() => { screenRef.current = screen; }, [screen]);
   useEffect(() => localStorage.setItem(STORAGE.quizzes, JSON.stringify(quizzes)), [quizzes]);
   useEffect(() => localStorage.setItem(STORAGE.profile, JSON.stringify(profile)), [profile]);
   useEffect(() => localStorage.setItem(STORAGE.comments, JSON.stringify(comments)), [comments]);
@@ -218,9 +240,20 @@ function App() {
   useEffect(() => {
     const baseUrl = `${window.location.pathname}${window.location.search}`;
     if (membership) {
-      if (window.history.state?.qpath !== "app") {
-        window.history.replaceState({ qpath: "role" }, "", `${baseUrl}#role`);
-        window.history.pushState({ qpath: "app" }, "", `${baseUrl}#app`);
+      const historyState = window.history.state;
+      if (historyState?.qpath === "app" && historyState.screen) {
+        const restoredIndex = Number.isInteger(historyState.index) ? historyState.index : 0;
+        navigationIndexRef.current = restoredIndex;
+        setNavigationIndex(restoredIndex);
+        setScreen(historyState.screen);
+      } else {
+        navigationIndexRef.current = 0;
+        setNavigationIndex(0);
+        window.history.replaceState(
+          { qpath: "app", screen: screenRef.current, index: 0 },
+          "",
+          `${baseUrl}#${screenRef.current}`
+        );
       }
     } else {
       window.history.replaceState({ qpath: "role" }, "", `${baseUrl}#role`);
@@ -228,14 +261,56 @@ function App() {
   }, [membership]);
   useEffect(() => {
     const handlePopState = (event) => {
-      if (event.state?.qpath !== "app") {
-        setMembership(null);
+      if (event.state?.qpath === "app" && event.state.screen) {
+        const restoredIndex = Number.isInteger(event.state.index) ? event.state.index : 0;
+        navigationIndexRef.current = restoredIndex;
+        setNavigationIndex(restoredIndex);
+        setScreen(event.state.screen);
+        return;
+      }
+      if (membership) {
+        const baseUrl = `${window.location.pathname}${window.location.search}`;
+        navigationIndexRef.current = 0;
+        setNavigationIndex(0);
         setScreen("home");
+        window.history.replaceState(
+          { qpath: "app", screen: "home", index: 0 },
+          "",
+          `${baseUrl}#home`
+        );
       }
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [membership]);
+
+  const navigateTo = (nextScreen, { replace = false } = {}) => {
+    if (!nextScreen) return;
+    setScreen(nextScreen);
+    screenRef.current = nextScreen;
+    if (!membership) return;
+
+    const baseUrl = `${window.location.pathname}${window.location.search}`;
+    if (!replace && nextScreen === window.history.state?.screen) return;
+    const nextIndex = replace ? navigationIndexRef.current : navigationIndexRef.current + 1;
+    const state = { qpath: "app", screen: nextScreen, index: nextIndex };
+    if (replace) {
+      window.history.replaceState(state, "", `${baseUrl}#${nextScreen}`);
+    } else {
+      window.history.pushState(state, "", `${baseUrl}#${nextScreen}`);
+    }
+    navigationIndexRef.current = nextIndex;
+    setNavigationIndex(nextIndex);
+  };
+
+  const goBackSafely = () => {
+    const historyState = window.history.state;
+    if (historyState?.qpath === "app" && navigationIndexRef.current > 0) {
+      window.history.back();
+      return;
+    }
+    navigateTo("home", { replace: true });
+  };
 
   const classQuizzes = useMemo(
     () => membership?.classId ? quizzes.filter((quiz) => belongsToClass(quiz, membership.classId)) : [],
@@ -260,17 +335,18 @@ function App() {
     () => classes.find((classroom) => classroom.id === membership?.classId) || null,
     [classes, membership]
   );
-  const openQuiz = (id) => {
-    const startIndex = classQuizzes.findIndex((quiz) => quiz.id === id);
+  const openQuiz = (id, quizPool = classQuizzes) => {
+    const sessionQuizzes = quizPool.length ? quizPool : classQuizzes;
+    const startIndex = sessionQuizzes.findIndex((quiz) => quiz.id === id);
     if (startIndex < 0) return;
     const session = [
-      ...classQuizzes.slice(startIndex),
-      ...classQuizzes.slice(0, startIndex),
+      ...sessionQuizzes.slice(startIndex),
+      ...sessionQuizzes.slice(0, startIndex),
     ].map((quiz) => quiz.id);
     setQuizSessionIds(session);
     setQuizSessionPosition(0);
     setActiveQuizId(id);
-    setScreen("answer");
+    navigateTo("answer");
   };
   const goToNextQuiz = (wasCorrect) => {
     const nextSessionIds = wasCorrect ? quizSessionIds : [...quizSessionIds, activeQuizId];
@@ -280,13 +356,12 @@ function App() {
       setQuizSessionIds(nextSessionIds);
       setQuizSessionPosition(nextPosition);
       setActiveQuizId(nextId);
-      setScreen("answer");
+      navigateTo("answer", { replace: true });
       return;
     }
     setQuizSessionIds([]);
     setQuizSessionPosition(0);
-    setActiveQuizId("");
-    setScreen("home");
+    navigateTo("home");
   };
   const recordAnswer = (id) => {
     setQuizzes((list) => list.map((quiz) => quiz.id === id ? { ...quiz, solvedCount: quiz.solvedCount + 1 } : quiz));
@@ -313,7 +388,7 @@ function App() {
     setProfile((current) => ({ ...current, createdCount: current.createdCount + 1 }));
     setMessage("作問も大切な学びです！");
     setActiveQuizId(quiz.id);
-    setScreen("quizzes");
+    navigateTo("quizzes");
   };
 
   const createClass = async ({ name, code, nickname }) => {
@@ -331,6 +406,7 @@ function App() {
     await waitForRemoteSave(saveClass(classroom));
     setMembership({ role: "teacher", classId: classroom.id });
     setScreen("dashboard");
+    screenRef.current = "dashboard";
   };
 
   const joinClass = async (code, nickname) => {
@@ -351,6 +427,7 @@ function App() {
     await waitForRemoteSave(saveClass(updatedClassroom));
     setMembership({ role: "student", classId: classroom.id });
     setScreen("home");
+    screenRef.current = "home";
     return true;
   };
 
@@ -372,13 +449,23 @@ function App() {
     await waitForRemoteSave(saveClass(updatedClassroom));
     setMembership({ role: "teacher", classId: classroom.id });
     setScreen("dashboard");
+    screenRef.current = "dashboard";
     return true;
   };
 
   const resetRole = () => {
     setMembership(null);
     setScreen("home");
+    screenRef.current = "home";
+    navigationIndexRef.current = 0;
+    setNavigationIndex(0);
   };
+
+  useEffect(() => {
+    if (membership && screen === "answer" && !activeQuiz) {
+      navigateTo("home", { replace: true });
+    }
+  }, [screen, activeQuiz, membership]);
 
   if (!membership) {
     return h("div", { className: "app-shell onboarding-shell" },
@@ -391,8 +478,17 @@ function App() {
   return h(React.Fragment, null,
     h("div", { className: "app-shell" },
       h("main", { className: "phone-frame" },
+        screen !== "home" && h("div", { className: "page-back-row" },
+          h("button", {
+            className: "page-back-button",
+            type: "button",
+            onClick: goBackSafely,
+            "aria-label": "ひとつ前の画面に戻る",
+            title: "戻る",
+          }, h(ArrowLeft, { size: 21 }), h("span", null, "戻る"))
+        ),
         firebaseStatus === "error" && h("div", { className: "sync-notice" }, "オンライン同期を確認できません。Firebaseの設定を確認してください。"),
-        screen === "home" && h(HomeScreen, { setScreen, membership, activeClass }),
+        (screen === "home" || (screen === "answer" && !activeQuiz)) && h(HomeScreen, { setScreen: navigateTo, membership, activeClass }),
         screen === "quizzes" && h(QuizList, { quizzes: classQuizzes, openQuiz, message, clearMessage: () => setMessage("") }),
         screen === "answer" && activeQuiz && h(AnswerScreen, {
           quiz: activeQuiz,
@@ -426,15 +522,15 @@ function App() {
             }));
           },
         }),
-        screen === "profile" && h(ProfileScreen, { profile, membership, activeClass, resetRole, setScreen }),
+        screen === "profile" && h(ProfileScreen, { profile, membership, activeClass, resetRole, setScreen: navigateTo }),
         screen === "dashboard" && membership.role === "teacher" && h(TeacherDashboard, {
           activeClass,
           quizzes: classQuizzes,
-          setScreen,
+          setScreen: navigateTo,
         })
       )
     ),
-    h(BottomNav, { current: screen, setScreen })
+    h(BottomNav, { current: screen, setScreen: navigateTo })
   );
 }
 
@@ -782,17 +878,53 @@ function HomeScreen({ setScreen, membership, activeClass }) {
 }
 
 function QuizList({ quizzes, openQuiz, message, clearMessage }) {
+  const [selectedSubject, setSelectedSubject] = useState("");
+  const subjectGroups = useMemo(() => getSubjectGroups(quizzes), [quizzes]);
+  const visibleQuizzes = selectedSubject
+    ? quizzes.filter((quiz) => quiz.subject === selectedSubject)
+    : quizzes;
+  useEffect(() => {
+    if (selectedSubject && !subjectGroups.some((group) => group.subject === selectedSubject)) {
+      setSelectedSubject("");
+    }
+  }, [selectedSubject, subjectGroups]);
+
   return h("section", { className: "screen" },
-    h(Header, { eyebrow: "Quiz", title: "クイズ一覧", body: "匿名で作られた問題に、まずは一問だけ挑戦。" }),
+    h(Header, {
+      eyebrow: "Quiz",
+      title: "クイズ一覧",
+      body: selectedSubject
+        ? `${selectedSubject}の問題群だけで挑戦できます。`
+        : "教科ごとの問題群を選んで、まずは一問だけ挑戦。"
+    }),
     message && h("button", { className: "notice", onClick: clearMessage }, h(CheckCircle2, { size: 18 }), message),
+    h("div", { className: "subject-filter", "aria-label": "教科で問題群を選ぶ" },
+      h("button", {
+        className: `subject-filter-button ${selectedSubject === "" ? "active" : ""}`,
+        type: "button",
+        onClick: () => setSelectedSubject(""),
+      }, `すべて ${quizzes.length}`),
+      subjectGroups.map((group) =>
+        h("button", {
+          className: `subject-filter-button ${selectedSubject === group.subject ? "active" : ""}`,
+          type: "button",
+          key: group.subject,
+          onClick: () => setSelectedSubject(group.subject),
+        }, `${group.subject} ${group.count}`)
+      )
+    ),
     h("div", { className: "quiz-list" },
-      quizzes.map((quiz) =>
+      visibleQuizzes.length === 0 && h("article", { className: "empty-card" },
+        h("strong", null, "この問題群にはまだクイズがありません"),
+        h("p", null, "作問も大切な学びです。最初の一問を作ってみましょう。")
+      ),
+      visibleQuizzes.map((quiz) =>
         h("article", { className: "quiz-card", key: quiz.id },
           h("div", { className: "card-top" }, h("span", { className: "subject" }, quiz.subject), h("span", { className: `difficulty ${quiz.difficulty}` }, quiz.difficulty)),
           h("h2", null, quiz.title),
           h("p", null, quiz.question),
           h("div", { className: "meta-row" }, h("span", null, quiz.author), h("span", null, `${quiz.solvedCount} 回挑戦`), h("span", null, `${quiz.likes} いい問題`)),
-          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id) }, "挑戦する")
+          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id, visibleQuizzes) }, "挑戦する")
         )
       )
     )
@@ -802,7 +934,11 @@ function QuizList({ quizzes, openQuiz, message, clearMessage }) {
 function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
   const [selected, setSelected] = useState("");
   const [result, setResult] = useState(null);
-  useEffect(() => { setSelected(""); setResult(null); }, [quiz.id, quizProgress?.current]);
+  const retryCurrentQuiz = () => {
+    setSelected("");
+    setResult(null);
+  };
+  useEffect(() => { retryCurrentQuiz(); }, [quiz.id, quizProgress?.current]);
   const submit = () => {
     setResult({ isCorrect: selected === quiz.correctAnswer });
     recordAnswer(quiz.id);
@@ -830,9 +966,15 @@ function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
           h("div", { className: "explanation" }, h("span", null, "解説"), h("p", null, quiz.explanation)),
           quizProgress && !quizProgress.hasNext && result.isCorrect && h("p", { className: "complete-message" }, "解き始めた時点の問題をすべて挑戦しました。挑戦したことが学びです。"),
           h("div", { className: "answer-actions" },
-            h("button", { className: "secondary-button", onClick: () => { setSelected(""); setResult(null); } }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
-            h("button", { className: "primary-button", onClick: () => goToNextQuiz(result.isCorrect) },
-              quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度出題へ",
+            (result.isCorrect || quizProgress?.hasNext) &&
+              h("button", { className: "secondary-button", onClick: retryCurrentQuiz }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
+            h("button", {
+              className: "primary-button",
+              onClick: () => !result.isCorrect && !quizProgress?.hasNext
+                ? retryCurrentQuiz()
+                : goToNextQuiz(result.isCorrect),
+            },
+              quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度挑戦する",
               h(ChevronRight, { size: 18 })
             )
           )
@@ -866,10 +1008,18 @@ function CreateScreen({ createQuiz }) {
     h(Header, { eyebrow: "Create", title: "クイズを作る", body: "作問も大切な学びです。考えた道すじを解説に残そう。" }),
     h("form", { className: "form-card", onSubmit: submit },
       field("タイトル", h("input", { value: form.title, onChange: (e) => update("title", e.target.value), placeholder: "例：比例の基本" })),
-      h("div", { className: "two-columns" },
-        field("教科", h("input", { value: form.subject, onChange: (e) => update("subject", e.target.value), placeholder: "数学" })),
-        field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい")))
-      ),
+      field("教科", h("select", {
+        className: "subject-select",
+        name: "subject",
+        value: form.subject,
+        onChange: (e) => update("subject", e.target.value),
+        required: true,
+        "aria-label": "教科を選択",
+      },
+        h("option", { value: "", disabled: true }, "教科を選択してください"),
+        SUBJECT_OPTIONS.map((subject) => h("option", { value: subject, key: subject }, subject))
+      )),
+      field("難易度", h("select", { value: form.difficulty, onChange: (e) => update("difficulty", e.target.value) }, h("option", null, "簡単"), h("option", null, "普通"), h("option", null, "難しい"))),
       field("問題文", h("textarea", { value: form.question, onChange: (e) => update("question", e.target.value), placeholder: "問題文を入力", rows: 3 })),
       h("div", { className: "choice-editor" },
         h("span", null, "選択肢 A〜D"),

@@ -1,0 +1,25 @@
+qpath GitHub Pages 完成版 2026-07-04
+
+この完成版には、これまでの修正を統合済みです。
+古い修正パッチを追加で入れる必要はありません。
+
+GitHubへのアップロード手順
+1. このフォルダを開きます。
+2. 中にある全項目を選びます。
+   .nojekyll
+   404.html
+   index.html
+   src フォルダ
+   vendor フォルダ
+   UPLOAD-INSTRUCTIONS.txt
+3. GitHubリポジトリの一番上（index.htmlがある場所）へアップロードします。
+4. 同じ名前のファイルは上書きします。
+5. Commit changes を押します。
+6. Actionsの処理が緑色になった後、公開ページを再読み込みします。
+
+注意
+- 外側の「qpath-complete-github-pages-2026-07-04」フォルダ自体を
+  GitHub内へ作らないでください。中身をリポジトリの一番上へ置きます。
+- ZIPファイルそのものはGitHubへアップロードしません。
+- 今後は古い個別パッチを重ねないでください。
+
