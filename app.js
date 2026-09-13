@@ -9,11 +9,15 @@ import {
   CircleUserRound,
   Clipboard,
   Edit3,
+  FileText,
   GraduationCap,
   Heart,
+  House,
   KeyRound,
   Lightbulb,
+  LockKeyhole,
   LogOut,
+  Megaphone,
   MessageCircle,
   PencilLine,
   Plus,
@@ -21,6 +25,7 @@ import {
   School,
   Send,
   Sparkles,
+  Trash2,
   Trophy,
   Users,
 } from "lucide-react";
@@ -29,16 +34,77 @@ import {
   findClassByCode,
   increaseQuizSolvedCount,
   migrateLocalData,
+  removeQuiz,
+  removeUpdateNote,
   saveClass,
   saveComment,
   saveQuiz,
+  saveUpdateNote,
   subscribeClasses,
   subscribeComments,
   subscribeQuizzes,
-} from "./firebase.js";
+  subscribeUpdateNotes,
+} from "./firebase.js?v=20260805-talk-profile-r2";
 
 const h = React.createElement;
-const APP_SCREENS = new Set(["home", "profile", "quizzes", "answer", "create", "study", "dashboard", "edit"]);
+const APP_SCREENS = new Set(["role", "home", "profile", "quizzes", "answer", "create", "study", "dashboard", "edit", "updates"]);
+
+function normalizeAnswerValue(value) {
+  return String(value ?? "").normalize("NFKC").trim();
+}
+
+function getCorrectChoiceIndex(quiz) {
+  const choices = Array.isArray(quiz?.choices) ? quiz.choices : [];
+  const normalizedAnswer = normalizeAnswerValue(quiz?.correctAnswer);
+  const textMatch = choices.findIndex((choice) => normalizeAnswerValue(choice) === normalizedAnswer);
+  if (textMatch >= 0) return textMatch;
+
+  const letterMatch = normalizedAnswer.toUpperCase().match(/^[A-D]$/);
+  return letterMatch ? letterMatch[0].charCodeAt(0) - 65 : -1;
+}
+
+function isRetiredOyamaQuiz(quiz) {
+  return [quiz?.title, quiz?.question, quiz?.author]
+    .some((value) => normalizeAnswerValue(value).includes("おやま"));
+}
+
+function normalizeClassCode(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 6);
+}
+
+function normalizeUserId(value) {
+  const normalized = String(value ?? "")
+    .normalize("NFKC")
+    .toUpperCase()
+    .replace(/[‐‑‒–—―ー−\s]/g, "-")
+    .replace(/[^A-Z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .slice(0, 40);
+
+  return /^[ST][A-Z0-9]{1,5}$/.test(normalized)
+    ? `${normalized[0]}-${normalized.slice(1)}`
+    : normalized;
+}
+
+const DEVELOPER_KEY_HASH = "73e5dc65dc4e27c582544ed16688a2f5eca044a03c62389ed5b5b02ed918ff7f";
+const DEVELOPER_USER_ID = "D-QPATH";
+
+function isDeveloperUserId(value) {
+  return normalizeUserId(value) === DEVELOPER_USER_ID;
+}
+
+async function hashDeveloperKey(value) {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error("このブラウザでは開発者キーを確認できません。");
+  }
+  const data = new TextEncoder().encode(value);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function getScreenFromHash() {
   if (typeof window === "undefined") return "home";
@@ -53,6 +119,8 @@ const STORAGE = {
   membership: "qpath.membership",
   classes: "qpath.classes",
   classProfiles: "qpath.classProfiles",
+  updateNotes: "qpath.updateNotes",
+  developerAccess: "qpath.developerAccess",
 };
 
 const AVATAR_COLORS = ["#38aee0", "#62cfbd", "#7aa7ff", "#f59fb3", "#f2b84b", "#8ec96d"];
@@ -120,25 +188,95 @@ function getProfileKey(classId, userId) {
 
 function getClassroomPeople(classroom) {
   return [
-    ...(classroom?.members || []).map((person) => ({ ...person, role: "student" })),
-    ...(classroom?.teacherMembers || []).map((person) => ({ ...person, role: "teacher" })),
+    ...(classroom?.members || []).map((person) =>
+      typeof person === "string"
+        ? { id: "", name: person, role: "student" }
+        : { ...person, id: normalizeUserId(person.id || person.userId), role: "student" }
+    ),
+    ...(classroom?.teacherMembers || []).map((person) =>
+      typeof person === "string"
+        ? { id: "", name: person, role: "teacher" }
+        : { ...person, id: normalizeUserId(person.id || person.userId), role: "teacher" }
+    ),
   ];
 }
 
 function findClassPerson(classroom, userId, role) {
-  const normalized = userId.trim().toUpperCase();
+  const normalized = normalizeUserId(userId);
+  if (!normalized) return null;
   return getClassroomPeople(classroom).find((person) =>
-    person.id === normalized && (!role || person.role === role)
+    normalizeUserId(person.id) === normalized && (!role || person.role === role)
   );
+}
+
+function getTalkIdentity(entry, classroom) {
+  const linkedPerson = entry?.authorId ? findClassPerson(classroom, entry.authorId) : null;
+  const linkedName = String(linkedPerson?.name || "").trim();
+  const storedName = String(entry?.author || "").trim();
+  const name = [linkedName, storedName].find((value) => value && value !== "匿名ユーザー")
+    || linkedName
+    || storedName
+    || "匿名ユーザー";
+  const color = linkedPerson?.avatarColor || entry?.authorAvatarColor;
+  return {
+    name,
+    initial: name === "匿名ユーザー" ? "匿" : (Array.from(name)[0] || "匿"),
+    bio: normalizeBio(linkedPerson?.bio || entry?.authorBio),
+    role: linkedPerson?.role || entry?.authorRole || "",
+    avatarColor: AVATAR_COLORS.includes(color) ? color : pickAvatarColor(entry?.authorId || name),
+  };
+}
+
+function generateUniqueUserId(classroom, role) {
+  let userId = generateUserId(role);
+  while (findClassPerson(classroom, userId)) userId = generateUserId(role);
+  return userId;
 }
 
 function upsertClassPerson(classroom, person) {
   const key = person.role === "teacher" ? "teacherMembers" : "members";
   const list = classroom[key] || [];
-  const nextList = list.some((item) => item.id === person.id)
-    ? list.map((item) => item.id === person.id ? { ...item, ...person } : item)
-    : [...list, person];
+  const normalizedPerson = { ...person, id: normalizeUserId(person.id) };
+  const nextList = list.some((item) => normalizeUserId(item?.id || item?.userId) === normalizedPerson.id)
+    ? list.map((item) =>
+        normalizeUserId(item?.id || item?.userId) === normalizedPerson.id
+          ? { ...item, ...normalizedPerson }
+          : item
+      )
+    : [...list, normalizedPerson];
   return { ...classroom, [key]: nextList };
+}
+
+function upsertClassroomInList(classrooms, classroom) {
+  return classrooms.some((item) => item.id === classroom.id)
+    ? classrooms.map((item) => item.id === classroom.id ? classroom : item)
+    : [classroom, ...classrooms];
+}
+
+async function resolveClassForJoin(classes, code, userId = "", role = "") {
+  const normalizedCode = normalizeClassCode(code);
+  const localMatches = classes.filter((item) => normalizeClassCode(item.code) === normalizedCode);
+  let remoteMatch = null;
+
+  try {
+    remoteMatch = await findClassByCode(normalizedCode);
+  } catch (error) {
+    console.error("クラス情報をFirebaseから確認できませんでした。", error);
+  }
+
+  const candidates = [
+    remoteMatch,
+    ...localMatches.filter((item) => item.id !== remoteMatch?.id),
+  ].filter(Boolean);
+
+  if (userId) {
+    return candidates.find((classroom) => findClassPerson(classroom, userId, role))
+      || remoteMatch
+      || localMatches[0]
+      || null;
+  }
+
+  return remoteMatch || localMatches[0] || null;
 }
 
 const samples = [
@@ -201,6 +339,44 @@ const sampleComments = [
   { id: "c2", author: "匿名ユーザー", text: "選択肢の並びがちょうど考えやすかったです。", reactions: { clear: 5, retry: 1, good: 6 } },
 ];
 
+const defaultUpdateNotes = [
+  {
+    id: "update-20260730-rejoin",
+    version: "β 0.4",
+    category: "改善",
+    title: "クラスへの再入室を安定させました",
+    body: "新しい利用者IDと旧形式の利用者IDの両方に対応しました。全角入力やハイフンの違いも自動で整えて照合します。",
+    publishedAt: "2026-07-30T00:00:00+09:00",
+    isDefault: true,
+  },
+  {
+    id: "update-20260728-flow",
+    version: "β 0.3",
+    category: "アップデート",
+    title: "入室フローと回答画面を改善しました",
+    body: "入室方法を選んだあとに必要な入力欄を表示する形へ変更しました。回答後の正誤表示と、次の問題へ進む流れも整えています。",
+    publishedAt: "2026-07-28T00:00:00+09:00",
+    isDefault: true,
+  },
+  {
+    id: "update-beta-start",
+    version: "β版",
+    category: "お知らせ",
+    title: "qpath β版を公開しています",
+    body: "「間違えて良い」から始まる学びを形にするため、みなさんの挑戦をもとに少しずつ改善していきます。",
+    publishedAt: "2026-07-04T00:00:00+09:00",
+    isDefault: true,
+  },
+];
+
+function withDefaultUpdateNotes(remoteNotes) {
+  const defaults = new Set(defaultUpdateNotes.map((note) => note.id));
+  return [
+    ...defaultUpdateNotes,
+    ...(remoteNotes || []).filter((note) => !defaults.has(note.id)),
+  ];
+}
+
 function isSampleQuiz(quiz) {
   return quiz.id.startsWith("sample-");
 }
@@ -241,18 +417,26 @@ function Header({ eyebrow, title, body }) {
 function App() {
   const [screen, setScreen] = useState(() => getScreenFromHash());
   const [navigationIndex, setNavigationIndex] = useState(0);
-  const [quizzes, setQuizzes] = useState(() => read(STORAGE.quizzes, samples));
+  const [quizzes, setQuizzes] = useState(() =>
+    read(STORAGE.quizzes, samples).filter((quiz) => !isRetiredOyamaQuiz(quiz))
+  );
   const [profile, setProfile] = useState(() => read(STORAGE.profile, { name: "匿名ユーザー", createdCount: 0, solvedCount: 0, challengeCount: 0 }));
   const [classProfiles, setClassProfiles] = useState(() => read(STORAGE.classProfiles, {}));
   const [comments, setComments] = useState(() => read(STORAGE.comments, sampleComments));
+  const [updateNotes, setUpdateNotes] = useState(() =>
+    withDefaultUpdateNotes(read(STORAGE.updateNotes, []))
+  );
   const [classes, setClasses] = useState(() => read(STORAGE.classes, []));
-  const [membership, setMembership] = useState(() => read(STORAGE.membership, null));
+  const [membership, setMembership] = useState(() =>
+    getScreenFromHash() === "role" ? null : read(STORAGE.membership, null)
+  );
   const [activeQuizId, setActiveQuizId] = useState(samples[0].id);
   const [activeEditQuizId, setActiveEditQuizId] = useState("");
   const [message, setMessage] = useState("");
   const [firebaseStatus, setFirebaseStatus] = useState("connecting");
   const [quizSessionIds, setQuizSessionIds] = useState([]);
   const [quizSessionPosition, setQuizSessionPosition] = useState(0);
+  const [issuedIdentity, setIssuedIdentity] = useState(null);
   const screenRef = useRef(getScreenFromHash());
   const navigationIndexRef = useRef(0);
 
@@ -261,6 +445,7 @@ function App() {
   useEffect(() => localStorage.setItem(STORAGE.profile, JSON.stringify(profile)), [profile]);
   useEffect(() => localStorage.setItem(STORAGE.classProfiles, JSON.stringify(classProfiles)), [classProfiles]);
   useEffect(() => localStorage.setItem(STORAGE.comments, JSON.stringify(comments)), [comments]);
+  useEffect(() => localStorage.setItem(STORAGE.updateNotes, JSON.stringify(updateNotes)), [updateNotes]);
   useEffect(() => localStorage.setItem(STORAGE.classes, JSON.stringify(classes)), [classes]);
   useEffect(() => {
     if (membership) localStorage.setItem(STORAGE.membership, JSON.stringify(membership));
@@ -310,18 +495,34 @@ function App() {
         await ensureFirebaseReady();
         if (cancelled) return;
         if (!localStorage.getItem("qpath.firebaseMigrated")) {
-          await migrateLocalData({ classes, quizzes, comments });
+          await migrateLocalData({
+            classes,
+            quizzes: quizzes.filter((quiz) => !isRetiredOyamaQuiz(quiz)),
+            comments,
+          });
           localStorage.setItem("qpath.firebaseMigrated", "true");
         }
         if (cancelled) return;
         unsubscribes.push(
           subscribeClasses(setClasses, () => setFirebaseStatus("error")),
           subscribeQuizzes(
-            (remoteQuizzes) => setQuizzes([...samples, ...remoteQuizzes.filter((item) => !isSampleQuiz(item))]),
+            (remoteQuizzes) => {
+              remoteQuizzes
+                .filter((item) => !isSampleQuiz(item) && isRetiredOyamaQuiz(item))
+                .forEach((item) => removeQuiz(item.id).catch(console.error));
+              setQuizzes([
+                ...samples,
+                ...remoteQuizzes.filter((item) => !isSampleQuiz(item) && !isRetiredOyamaQuiz(item)),
+              ]);
+            },
             () => setFirebaseStatus("error")
           ),
           subscribeComments(
             (remoteComments) => setComments([...sampleComments, ...remoteComments.filter((item) => item.id !== "c1" && item.id !== "c2")]),
+            () => setFirebaseStatus("error")
+          ),
+          subscribeUpdateNotes(
+            (remoteNotes) => setUpdateNotes(withDefaultUpdateNotes(remoteNotes)),
             () => setFirebaseStatus("error")
           )
         );
@@ -390,6 +591,14 @@ function App() {
     const handleHashChange = () => {
       if (!membership) return;
       const nextScreen = getScreenFromHash();
+      if (nextScreen === "role") {
+        setMembership(null);
+        setScreen("role");
+        screenRef.current = "role";
+        navigationIndexRef.current = 0;
+        setNavigationIndex(0);
+        return;
+      }
       if (nextScreen === screenRef.current) return;
       const baseUrl = `${window.location.pathname}${window.location.search}`;
       screenRef.current = nextScreen;
@@ -432,6 +641,19 @@ function App() {
     navigateTo("home", { replace: true });
   };
 
+  const enterAppScreen = (nextScreen) => {
+    const baseUrl = `${window.location.pathname}${window.location.search}`;
+    setScreen(nextScreen);
+    screenRef.current = nextScreen;
+    navigationIndexRef.current = 0;
+    setNavigationIndex(0);
+    window.history.replaceState(
+      { qpath: "app", screen: nextScreen, index: 0 },
+      "",
+      `${baseUrl}#${nextScreen}`
+    );
+  };
+
   const classQuizzes = useMemo(
     () => membership?.classId ? quizzes.filter((quiz) => belongsToClass(quiz, membership.classId)) : [],
     [quizzes, membership?.classId]
@@ -461,17 +683,31 @@ function App() {
   );
   const activeProfileKey = getProfileKey(membership?.classId, membership?.userId);
   const activeClassProfile = activeProfileKey ? classProfiles[activeProfileKey] : null;
+  const hasDeveloperAccess = Boolean(
+    membership?.isDeveloper
+    && isDeveloperUserId(membership.userId)
+    && localStorage.getItem(STORAGE.developerAccess) === DEVELOPER_KEY_HASH
+  );
 
   useEffect(() => {
-    if (!membership?.classId || !membership.userId || !activeClass) return;
+    if (!membership?.classId || !membership.userId || !activeClass || membership.isDeveloper) return;
     const role = membership.role === "teacher" ? "teacher" : "student";
-    if (findClassPerson(activeClass, membership.userId, role)) return;
+    const existing = findClassPerson(activeClass, membership.userId, role);
     const person = {
+      ...existing,
       id: membership.userId,
       name: activeClassProfile?.name || profile.name || "匿名ユーザー",
+      bio: normalizeBio(activeClassProfile?.bio),
+      avatarColor: activeClassProfile?.avatarColor || pickAvatarColor(membership.userId),
       role,
-      joinedAt: new Date().toISOString(),
+      joinedAt: existing?.joinedAt || new Date().toISOString(),
     };
+    if (
+      existing
+      && existing.name === person.name
+      && normalizeBio(existing.bio) === person.bio
+      && existing.avatarColor === person.avatarColor
+    ) return;
     const updatedClassroom = upsertClassPerson(activeClass, person);
     setClasses((current) => current.map((classroom) => classroom.id === activeClass.id ? updatedClassroom : classroom));
     saveClass(updatedClassroom).catch(console.error);
@@ -483,7 +719,7 @@ function App() {
         role,
       }),
     }));
-  }, [membership?.classId, membership?.role, membership?.userId, activeClass?.id, activeClassProfile?.name, profile.name]);
+  }, [membership?.classId, membership?.isDeveloper, membership?.role, membership?.userId, activeClass?.id, activeClassProfile?.name, activeClassProfile?.bio, activeClassProfile?.avatarColor, profile.name]);
 
   const updateClassProfile = (updater, targetKey = activeProfileKey) => {
     if (!targetKey) return;
@@ -526,8 +762,12 @@ function App() {
     navigateTo("home");
   };
   const recordAnswer = (quiz, isCorrect) => {
-    setQuizzes((list) => list.map((item) => item.id === quiz.id ? { ...item, solvedCount: item.solvedCount + 1 } : item));
-    setProfile((current) => ({ ...current, solvedCount: current.solvedCount + 1, challengeCount: current.challengeCount + 1 }));
+    setQuizzes((list) => list.map((item) => item.id === quiz.id ? { ...item, solvedCount: (item.solvedCount || 0) + 1 } : item));
+    setProfile((current) => ({
+      ...current,
+      solvedCount: (current.solvedCount || 0) + 1,
+      challengeCount: (current.challengeCount || 0) + 1,
+    }));
     updateClassProfile((current) => {
       const subject = quiz.subject || "その他";
       const answeredBySubject = { ...(current.answeredBySubject || {}) };
@@ -549,7 +789,7 @@ function App() {
         solvedCreatedCount: (current.solvedCreatedCount || 0) + 1,
       }), getProfileKey(quiz.classId, quiz.authorId));
     }
-    if (!quiz.id.startsWith("sample-")) increaseQuizSolvedCount(quiz.id).catch(console.error);
+    if (!String(quiz.id).startsWith("sample-")) increaseQuizSolvedCount(quiz.id).catch(console.error);
   };
   const createQuiz = async (form) => {
     const quiz = {
@@ -558,7 +798,7 @@ function App() {
       subject: form.subject.trim(),
       question: form.question.trim(),
       choices: form.choices.map((choice) => choice.trim()),
-      correctAnswer: form.correctAnswer,
+      correctAnswer: form.correctAnswer.trim(),
       explanation: form.explanation.trim(),
       difficulty: form.difficulty,
       author: activeClassProfile?.name || profile.name,
@@ -601,7 +841,7 @@ function App() {
       subject: form.subject.trim(),
       question: form.question.trim(),
       choices: form.choices.map((choice) => choice.trim()),
-      correctAnswer: form.correctAnswer,
+      correctAnswer: form.correctAnswer.trim(),
       explanation: form.explanation.trim(),
       difficulty: form.difficulty,
       author: activeClassProfile?.name || profile.name,
@@ -613,6 +853,23 @@ function App() {
     setActiveEditQuizId("");
     navigateTo("profile");
     return true;
+  };
+
+  const deleteQuizAsDeveloper = async (quizId) => {
+    if (!hasDeveloperAccess) return false;
+    const quiz = classQuizzes.find((item) => item.id === quizId);
+    if (!quiz || isSampleQuiz(quiz)) return false;
+    setQuizzes((current) => current.filter((item) => item.id !== quizId));
+    try {
+      await removeQuiz(quizId);
+      setMessage("クイズを削除しました。");
+      return true;
+    } catch (error) {
+      console.error("クイズを削除できませんでした。", error);
+      setQuizzes((current) => current.some((item) => item.id === quiz.id) ? current : [quiz, ...current]);
+      setMessage("クイズを削除できませんでした。通信状態を確認してください。");
+      return false;
+    }
   };
 
   const createClass = async ({ name, code, nickname, password }) => {
@@ -636,17 +893,17 @@ function App() {
     setClasses((current) => [classroom, ...current]);
     await waitForRemoteSave(saveClass(classroom));
     setMembership({ role: "teacher", classId: classroom.id, userId: teacherId });
-    setScreen("dashboard");
-    screenRef.current = "dashboard";
+    setIssuedIdentity({ userId: teacherId, className: classroom.name });
+    enterAppScreen("dashboard");
   };
 
   const joinClass = async ({ code, nickname, userId }) => {
-    const normalized = code.trim().toUpperCase();
-    const classroom = classes.find((item) => item.code === normalized) || await findClassByCode(normalized);
+    const normalizedUserId = normalizeUserId(userId);
+    const classroom = await resolveClassForJoin(classes, code, normalizedUserId, "student");
     if (!classroom) return false;
-    const existing = userId ? findClassPerson(classroom, userId, "student") : null;
-    if (userId && !existing) return false;
-    const memberId = existing?.id || generateUserId("student");
+    const existing = normalizedUserId ? findClassPerson(classroom, normalizedUserId, "student") : null;
+    if (normalizedUserId && !existing) return false;
+    const memberId = existing?.id || generateUniqueUserId(classroom, "student");
     const memberName = existing?.name || nickname;
     setProfile((current) => ({ ...current, name: memberName }));
     const updatedClassroom = upsertClassPerson(classroom, {
@@ -659,25 +916,59 @@ function App() {
       ...current,
       [getProfileKey(classroom.id, memberId)]: current[getProfileKey(classroom.id, memberId)] || createProfileForClass({ id: memberId, name: memberName, role: "student" }),
     }));
-    setClasses((current) => current.map((item) => {
-      if (item.id !== classroom.id) return item;
-      return updatedClassroom;
-    }));
+    setClasses((current) => upsertClassroomInList(current, updatedClassroom));
     await waitForRemoteSave(saveClass(updatedClassroom));
     setMembership({ role: "student", classId: classroom.id, userId: memberId });
-    setScreen("home");
-    screenRef.current = "home";
+    if (!existing) setIssuedIdentity({ userId: memberId, className: classroom.name });
+    enterAppScreen("home");
     return true;
   };
 
   const joinClassAsTeacher = async ({ code, nickname, userId, password }) => {
-    const normalized = code.trim().toUpperCase();
-    const classroom = classes.find((item) => item.code === normalized) || await findClassByCode(normalized);
+    const normalizedUserId = normalizeUserId(userId);
+    const developerEntry = isDeveloperUserId(normalizedUserId);
+    const classroom = await resolveClassForJoin(
+      classes,
+      code,
+      developerEntry ? "" : normalizedUserId,
+      developerEntry ? "" : "teacher"
+    );
     if (!classroom) return false;
+
+    if (developerEntry) {
+      try {
+        const hashedKey = await hashDeveloperKey(password);
+        if (hashedKey !== DEVELOPER_KEY_HASH) return false;
+      } catch (error) {
+        console.error("開発者キーを確認できませんでした。", error);
+        return false;
+      }
+      const developerName = nickname || "qpath 開発者";
+      localStorage.setItem(STORAGE.developerAccess, DEVELOPER_KEY_HASH);
+      setProfile((current) => ({ ...current, name: developerName }));
+      setClassProfiles((current) => ({
+        ...current,
+        [getProfileKey(classroom.id, DEVELOPER_USER_ID)]: current[getProfileKey(classroom.id, DEVELOPER_USER_ID)] || createProfileForClass({
+          id: DEVELOPER_USER_ID,
+          name: developerName,
+          role: "teacher",
+        }),
+      }));
+      setClasses((current) => upsertClassroomInList(current, classroom));
+      setMembership({
+        role: "teacher",
+        classId: classroom.id,
+        userId: DEVELOPER_USER_ID,
+        isDeveloper: true,
+      });
+      enterAppScreen("dashboard");
+      return true;
+    }
+
     if ((classroom.password || "") !== password) return false;
-    const existing = userId ? findClassPerson(classroom, userId, "teacher") : null;
-    if (userId && !existing) return false;
-    const teacherId = existing?.id || generateUserId("teacher");
+    const existing = normalizedUserId ? findClassPerson(classroom, normalizedUserId, "teacher") : null;
+    if (normalizedUserId && !existing) return false;
+    const teacherId = existing?.id || generateUniqueUserId(classroom, "teacher");
     const teacherName = existing?.name || nickname;
     setProfile((current) => ({ ...current, name: teacherName }));
     const teacherNames = classroom.teachers || [classroom.teacher];
@@ -694,21 +985,89 @@ function App() {
       ...current,
       [getProfileKey(classroom.id, teacherId)]: current[getProfileKey(classroom.id, teacherId)] || createProfileForClass({ id: teacherId, name: teacherName, role: "teacher" }),
     }));
-    setClasses((current) => current.map((item) => {
-      if (item.id !== classroom.id) return item;
-      return updatedClassroom;
-    }));
+    setClasses((current) => upsertClassroomInList(current, updatedClassroom));
     await waitForRemoteSave(saveClass(updatedClassroom));
     setMembership({ role: "teacher", classId: classroom.id, userId: teacherId });
-    setScreen("dashboard");
-    screenRef.current = "dashboard";
+    if (!existing) setIssuedIdentity({ userId: teacherId, className: classroom.name });
+    enterAppScreen("dashboard");
     return true;
+  };
+
+  const updateCurrentProfile = (changes) => {
+    const nextName = changes.name?.trim();
+    const resolvedName = nextName || activeClassProfile?.name || profile.name || "匿名ユーザー";
+    const resolvedBio = Object.prototype.hasOwnProperty.call(changes, "bio")
+      ? normalizeBio(changes.bio)
+      : normalizeBio(activeClassProfile?.bio);
+    const requestedColor = changes.avatarColor || activeClassProfile?.avatarColor;
+    const resolvedAvatarColor = AVATAR_COLORS.includes(requestedColor)
+      ? requestedColor
+      : pickAvatarColor(membership?.userId);
+    setProfile((current) => ({
+      ...current,
+      ...changes,
+      name: nextName || current.name,
+      bio: resolvedBio,
+      avatarColor: resolvedAvatarColor,
+    }));
+    updateClassProfile((current) => ({
+      ...current,
+      ...changes,
+      name: nextName || current.name,
+      bio: resolvedBio,
+      avatarColor: resolvedAvatarColor,
+    }));
+
+    if (!activeClass || !membership?.userId || membership.isDeveloper) return;
+    const role = membership.role === "teacher" ? "teacher" : "student";
+    const existing = findClassPerson(activeClass, membership.userId, role);
+    const updatedClassroom = upsertClassPerson(activeClass, {
+      ...existing,
+      id: membership.userId,
+      name: resolvedName,
+      bio: resolvedBio,
+      avatarColor: resolvedAvatarColor,
+      role,
+      joinedAt: existing?.joinedAt || new Date().toISOString(),
+    });
+    setClasses((current) => current.map((classroom) =>
+      classroom.id === activeClass.id ? updatedClassroom : classroom
+    ));
+    saveClass(updatedClassroom).catch(console.error);
+  };
+
+  const publishUpdateNote = async (draft) => {
+    const existing = updateNotes.find((note) => note.id === draft.id);
+    const now = new Date().toISOString();
+    const note = {
+      id: existing?.id || `update-${Date.now()}`,
+      version: draft.version.trim(),
+      category: draft.category,
+      title: draft.title.trim(),
+      body: draft.body.trim(),
+      author: "qpath 開発者",
+      publishedAt: existing?.publishedAt || now,
+      updatedAt: now,
+    };
+    setUpdateNotes((current) => [
+      note,
+      ...current.filter((item) => item.id !== note.id),
+    ]);
+    await waitForRemoteSave(saveUpdateNote(note));
+    return note;
+  };
+
+  const deletePublishedUpdateNote = (noteId) => {
+    const note = updateNotes.find((item) => item.id === noteId);
+    if (!note || note.isDefault) return;
+    setUpdateNotes((current) => current.filter((item) => item.id !== noteId));
+    removeUpdateNote(noteId).catch(console.error);
   };
 
   const resetRole = () => {
     setMembership(null);
-    setScreen("home");
-    screenRef.current = "home";
+    setScreen("role");
+    screenRef.current = "role";
     navigationIndexRef.current = 0;
     setNavigationIndex(0);
   };
@@ -741,7 +1100,14 @@ function App() {
         ),
         firebaseStatus === "error" && h("div", { className: "sync-notice" }, "オンライン同期を確認できません。Firebaseの設定を確認してください。"),
         (screen === "home" || (screen === "answer" && !activeQuiz)) && h(HomeScreen, { setScreen: navigateTo, membership, activeClass }),
-        screen === "quizzes" && h(QuizList, { quizzes: classQuizzes, openQuiz, message, clearMessage: () => setMessage("") }),
+        screen === "quizzes" && h(QuizList, {
+          quizzes: classQuizzes,
+          openQuiz,
+          message,
+          clearMessage: () => setMessage(""),
+          developerMode: hasDeveloperAccess,
+          deleteQuiz: deleteQuizAsDeveloper,
+        }),
         screen === "answer" && activeQuiz && h(AnswerScreen, {
           quiz: activeQuiz,
           recordAnswer,
@@ -755,11 +1121,15 @@ function App() {
         }),
         screen === "study" && h(StudyScreen, {
           comments: classComments,
+          activeClass,
           addComment: (text) => {
             const comment = {
               id: `comment-${Date.now()}`,
               author: activeClassProfile?.name || profile.name,
               authorId: membership.userId,
+              authorBio: normalizeBio(activeClassProfile?.bio),
+              authorRole: membership.role,
+              authorAvatarColor: activeClassProfile?.avatarColor || pickAvatarColor(membership.userId),
               text,
               classId: membership.classId,
               reactions: { "😊": 0, "🥰": 0, "🫡": 0, "😯": 0 },
@@ -779,6 +1149,9 @@ function App() {
                     id: `reply-${Date.now()}`,
                     author: activeClassProfile?.name || profile.name,
                     authorId: membership.userId,
+                    authorBio: normalizeBio(activeClassProfile?.bio),
+                    authorRole: membership.role,
+                    authorAvatarColor: activeClassProfile?.avatarColor || pickAvatarColor(membership.userId),
                     text,
                     createdAt: new Date().toISOString(),
                   },
@@ -806,14 +1179,18 @@ function App() {
           classProfile: activeClassProfile,
           membership,
           activeClass,
+          classProfiles,
           resetRole,
           setScreen: navigateTo,
           ownQuizzes: classQuizzes.filter((quiz) => quiz.authorId === membership.userId),
           editOwnQuiz,
-          updateProfile: (changes) => {
-            setProfile((current) => ({ ...current, ...changes, name: changes.name || current.name }));
-            updateClassProfile((current) => ({ ...current, ...changes }));
-          },
+          updateProfile: updateCurrentProfile,
+          developerMode: hasDeveloperAccess,
+        }),
+        screen === "updates" && h(DeveloperNotesScreen, {
+          notes: updateNotes,
+          publishNote: publishUpdateNote,
+          deleteNote: deletePublishedUpdateNote,
         }),
         screen === "dashboard" && membership.role === "teacher" && h(TeacherDashboard, {
           activeClass,
@@ -823,6 +1200,10 @@ function App() {
         })
       )
     ),
+    issuedIdentity && h(IssuedUserIdNotice, {
+      identity: issuedIdentity,
+      onClose: () => setIssuedIdentity(null),
+    }),
     h(BottomNav, { current: screen, setScreen: navigateTo })
   );
 }
@@ -839,6 +1220,7 @@ function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
   const [returning, setReturning] = useState(null);
   const [teacherAction, setTeacherAction] = useState("");
   const [error, setError] = useState("");
+  const developerEntry = role === "teacher" && returning === true && isDeveloperUserId(userId);
 
   const chooseRole = (nextRole) => {
     setRole(nextRole);
@@ -849,11 +1231,24 @@ function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
 
   const submitJoin = async (event) => {
     event.preventDefault();
+    if (returning === null) {
+      setError("「はじめて入る」か「入ったことがある」を選んでください。");
+      return;
+    }
+    if (returning && !normalizeUserId(userId)) {
+      setError(`利用者IDを確認してください。例：${role === "teacher" ? "T-ABCDE" : "S-ABCDE"}`);
+      return;
+    }
     const joined = role === "teacher"
       ? await joinClassAsTeacher({ code: joinCode, nickname: nickname.trim(), userId, password: classPassword })
       : await joinClass({ code: joinCode, nickname: nickname.trim(), userId });
     if (!joined) {
-      setError("クラスが見つかりません。コードをもう一度確認してください。");
+      const details = role === "teacher"
+        ? developerEntry
+          ? "クラスコード、開発者ID、開発者キー"
+          : "クラスコード、利用者ID、先生用パスワード"
+        : returning ? "クラスコードと利用者ID" : "クラスコード";
+      setError(`${details}をもう一度確認してください。`);
     }
   };
 
@@ -881,7 +1276,10 @@ function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
       className: "role-form",
       onSubmit: (event) => {
         event.preventDefault();
-        if (nickname.trim()) setStep(role === "teacher" ? "teacher-choice" : "join-choice");
+        if (nickname.trim()) {
+          setReturning(null);
+          setStep(role === "teacher" ? "teacher-choice" : "class");
+        }
       },
     },
       h("button", {
@@ -943,53 +1341,15 @@ function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
           className: "entry-option",
           onClick: () => {
             setTeacherAction("join");
-            setStep("join-choice");
+            setReturning(null);
+            setUserId("");
+            setClassPassword("");
+            setStep("class");
           },
         },
           h(KeyRound, { size: 23 }),
           h("strong", null, "コードでクラスに入る"),
           h("span", null, "共同教員として参加します")
-        )
-      )
-    ),
-    step === "join-choice" && h("div", { className: "role-form" },
-      h("button", {
-        type: "button",
-        className: "text-button",
-        onClick: () => setStep(role === "teacher" ? "teacher-choice" : "nickname"),
-      }, role === "teacher" ? "入り方の選択に戻る" : "ニックネーム設定に戻る"),
-      h("div", { className: "role-heading" },
-        h("div", { className: `role-icon ${role}` }, h(KeyRound, { size: 26 })),
-        h("div", null,
-          h("strong", null, "このクラスは初めてですか？"),
-          h("span", null, "一度入ったクラスなら、利用者IDで同じプロフィールを使えます。")
-        )
-      ),
-      h("div", { className: "teacher-entry-grid" },
-        h("button", {
-          type: "button",
-          className: "entry-option",
-          onClick: () => {
-            setReturning(true);
-            setStep("class");
-          },
-        },
-          h(KeyRound, { size: 23 }),
-          h("strong", null, "入ったことがある"),
-          h("span", null, "利用者IDとクラスコードで入室します")
-        ),
-        h("button", {
-          type: "button",
-          className: "entry-option",
-          onClick: () => {
-            setReturning(false);
-            setUserId("");
-            setStep("class");
-          },
-        },
-          h(Plus, { size: 23 }),
-          h("strong", null, "はじめて入る"),
-          h("span", null, "新しい利用者IDを発行します")
         )
       )
     ),
@@ -1029,52 +1389,157 @@ function RoleSetup({ createClass, joinClass, joinClassAsTeacher }) {
       h("button", {
         type: "button",
         className: "text-button",
-        onClick: () => setStep("join-choice"),
+        onClick: () => setStep(role === "teacher" ? "teacher-choice" : "nickname"),
       }, role === "teacher" ? "入り方の選択に戻る" : "ニックネーム設定に戻る"),
       h("div", { className: "role-heading" },
         h("div", { className: `role-icon ${role}` }, h(KeyRound, { size: 26 })),
         h("div", null,
           h("strong", null, role === "teacher" ? "教員としてクラスに参加" : "クラスに参加"),
-          h("span", null, "共有された6文字のコードを入力")
+          h("span", null, "参加方法を選び、共有されたコードを入力します")
         )
       ),
-      returning && field("利用者ID", h("input", {
-        className: "code-input",
-        value: userId,
-        onChange: (event) => {
-          setUserId(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 7));
-          setError("");
+      h("div", { className: "join-mode-selector", "aria-label": "クラスへの参加方法" },
+        h("button", {
+          type: "button",
+          className: `join-mode-button ${returning === false ? "selected" : ""}`,
+          "aria-pressed": returning === false,
+          onClick: () => {
+            setReturning(false);
+            setUserId("");
+            setError("");
+          },
         },
-        placeholder: role === "teacher" ? "T-ABCDE" : "S-ABCDE",
-        maxLength: 7,
-        autoCapitalize: "characters",
-      })),
-      field("クラスコード", h("input", {
-        className: "code-input",
-        value: joinCode,
-        onChange: (event) => {
-          setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
-          setError("");
+          h(Plus, { size: 20 }),
+          h("span", null, "はじめて入る"),
+          h("small", null, "利用者IDを新しく発行")
+        ),
+        h("button", {
+          type: "button",
+          className: `join-mode-button ${returning === true ? "selected" : ""}`,
+          "aria-pressed": returning === true,
+          onClick: () => {
+            setReturning(true);
+            setError("");
+          },
         },
-        placeholder: "ABC234",
-        maxLength: 6,
-        autoCapitalize: "characters",
-        required: true,
-      })),
-      role === "teacher" && field("クラスのパスワード", h("input", {
-        type: "password",
-        value: classPassword,
-        onChange: (event) => {
-          setClassPassword(event.target.value.slice(0, 32));
-          setError("");
+          h(KeyRound, { size: 20 }),
+          h("span", null, "入ったことがある"),
+          h("small", null, "以前の利用者IDで入室")
+        )
+      ),
+      returning === null && h("p", { className: "join-mode-help" }, "まず、どちらかを選んでください。"),
+      returning !== null && h(React.Fragment, null,
+        field("クラスコード", h("input", {
+          className: "code-input",
+          value: joinCode,
+          onChange: (event) => {
+            setJoinCode(normalizeClassCode(event.target.value));
+            setError("");
+          },
+          placeholder: "ABC234",
+          maxLength: 6,
+          autoCapitalize: "characters",
+          required: true,
+        })),
+        returning && field("利用者ID", h("input", {
+          className: "code-input",
+          value: userId,
+          onChange: (event) => {
+            setUserId(normalizeUserId(event.target.value));
+            setError("");
+          },
+          placeholder: role === "teacher" ? "T-ABCDE" : "S-ABCDE",
+          maxLength: 40,
+          autoCapitalize: "characters",
+          required: true,
+        })),
+        role === "teacher" && field(developerEntry ? "開発者キー" : "クラスのパスワード", h("input", {
+          type: "password",
+          value: classPassword,
+          onChange: (event) => {
+            setClassPassword(event.target.value.slice(0, 32));
+            setError("");
+          },
+          placeholder: developerEntry ? "開発者キー" : "先生用パスワード",
+          required: true,
+        })),
+        error && h("p", { className: "form-error" }, error),
+        h("button", {
+          className: "primary-button",
+          type: "submit",
+          disabled:
+            joinCode.length !== 6 ||
+            (returning && !normalizeUserId(userId)) ||
+            (role === "teacher" && !classPassword),
         },
-        placeholder: "先生用パスワード",
-        required: true,
-      })),
-      error && h("p", { className: "form-error" }, error),
-      h("button", { className: "primary-button", type: "submit", disabled: joinCode.length !== 6 || (role === "teacher" && !classPassword) },
-        role === "teacher" ? "教員として参加" : "クラスに参加"
+          role === "teacher" ? "教員として参加" : "クラスに参加"
+        )
       )
+    )
+  );
+}
+
+function IssuedUserIdNotice({ identity, onClose }) {
+  const [copyStatus, setCopyStatus] = useState("");
+  const idInputRef = useRef(null);
+
+  const copyUserId = () => {
+    const input = idInputRef.current;
+    let copied = false;
+    if (input) {
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      try {
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      }
+    }
+
+    const finish = (succeeded) => {
+      setCopyStatus(succeeded ? "コピーしました" : "IDを選択しました。コピーしてください");
+    };
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(identity.userId)
+          .then(() => finish(true))
+          .catch(() => finish(copied));
+        return;
+      }
+    } catch {}
+    finish(copied);
+  };
+
+  return h("div", { className: "issued-id-overlay" },
+    h("section", {
+      className: "issued-id-dialog",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "issued-id-title",
+    },
+      h("div", { className: "issued-id-icon" }, h(CheckCircle2, { size: 30 })),
+      h("span", null, identity.className),
+      h("h2", { id: "issued-id-title" }, "利用者IDを発行しました"),
+      h("p", null, "次にこのクラスへ入るときに使います。忘れないように控えてください。"),
+      h("div", { className: "issued-id-value" },
+        h("input", {
+          ref: idInputRef,
+          value: identity.userId,
+          readOnly: true,
+          "aria-label": "発行された利用者ID",
+          onClick: (event) => event.currentTarget.select(),
+        }),
+        h("button", {
+          type: "button",
+          onClick: copyUserId,
+          title: "利用者IDをコピー",
+          "aria-label": "利用者IDをコピー",
+        }, copyStatus === "コピーしました" ? h(CheckCircle2, { size: 20 }) : h(Clipboard, { size: 20 }))
+      ),
+      copyStatus && h("small", { className: "issued-id-status", role: "status" }, copyStatus),
+      h("button", { type: "button", className: "primary-button", onClick: onClose }, "確認しました")
     )
   );
 }
@@ -1230,6 +1695,14 @@ function HomeScreen({ setScreen, membership, activeClass }) {
       h("div", null, h("strong", null, "今日の合言葉"), h("p", null, "挑戦したことが学びです。ここから理解が深まります。")),
       h(Lightbulb, { size: 36 })
     ),
+    h("button", { className: "developer-note-link", type: "button", onClick: () => setScreen("updates") },
+      h("div", { className: "developer-note-link-icon" }, h(FileText, { size: 21 })),
+      h("div", null,
+        h("strong", null, "開発者ノート"),
+        h("span", null, "β版のアップデートと改善内容")
+      ),
+      h(ChevronRight, { size: 19 })
+    ),
     h("div", { className: "action-grid" },
       actions.map(([label, detail, Icon, target]) =>
         h("button", { className: "action-card", key: label, onClick: () => setScreen(target) },
@@ -1240,12 +1713,218 @@ function HomeScreen({ setScreen, membership, activeClass }) {
   );
 }
 
-function QuizList({ quizzes, openQuiz, message, clearMessage }) {
+function DeveloperNotesScreen({ notes, publishNote, deleteNote }) {
+  const emptyDraft = { id: "", version: "", category: "アップデート", title: "", body: "" };
+  const [isDeveloper, setIsDeveloper] = useState(
+    () => localStorage.getItem(STORAGE.developerAccess) === DEVELOPER_KEY_HASH
+  );
+  const [showUnlock, setShowUnlock] = useState(false);
+  const [developerKey, setDeveloperKey] = useState("");
+  const [accessMessage, setAccessMessage] = useState("");
+  const [draft, setDraft] = useState(emptyDraft);
+  const [saveMessage, setSaveMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const orderedNotes = useMemo(
+    () => [...notes].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)),
+    [notes]
+  );
+
+  const updateDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+  const resetDraft = () => setDraft(emptyDraft);
+  const formatDate = (value) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? ""
+      : new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric" }).format(date);
+  };
+
+  const unlockDeveloperMode = async (event) => {
+    event.preventDefault();
+    setAccessMessage("");
+    try {
+      const hashed = await hashDeveloperKey(developerKey.trim());
+      if (hashed !== DEVELOPER_KEY_HASH) {
+        setAccessMessage("開発者キーを確認してください。");
+        return;
+      }
+      localStorage.setItem(STORAGE.developerAccess, DEVELOPER_KEY_HASH);
+      setIsDeveloper(true);
+      setShowUnlock(false);
+      setDeveloperKey("");
+    } catch (error) {
+      setAccessMessage(error.message || "開発者キーを確認できませんでした。");
+    }
+  };
+
+  const lockDeveloperMode = () => {
+    localStorage.removeItem(STORAGE.developerAccess);
+    setIsDeveloper(false);
+    setShowUnlock(false);
+    resetDraft();
+  };
+
+  const submitNote = async (event) => {
+    event.preventDefault();
+    if (!draft.version.trim() || !draft.title.trim() || !draft.body.trim()) return;
+    setSaving(true);
+    setSaveMessage("");
+    await publishNote(draft);
+    setSaving(false);
+    setSaveMessage(draft.id ? "アップデートノートを更新しました。" : "アップデートノートを公開しました。");
+    resetDraft();
+  };
+
+  const editNote = (note) => {
+    setDraft({
+      id: note.id,
+      version: note.version || "",
+      category: note.category || "アップデート",
+      title: note.title || "",
+      body: note.body || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  return h("section", { className: "screen update-screen" },
+    h(Header, {
+      eyebrow: "Beta update log",
+      title: "開発者ノート",
+      body: "qpath β版のアップデートと改善内容をお知らせします。",
+    }),
+    h("article", { className: "update-intro" },
+      h("div", null, h(Megaphone, { size: 22 })),
+      h("p", null, "みなさんの挑戦をもとに、学びやすさを少しずつ更新しています。")
+    ),
+    isDeveloper
+      ? h("section", { className: "developer-editor" },
+          h("div", { className: "developer-editor-heading" },
+            h("div", null, h("span", null, "Developer only"), h("h2", null, draft.id ? "ノートを編集" : "更新内容を投稿")),
+            h("button", {
+              type: "button",
+              className: "icon-text-button",
+              onClick: lockDeveloperMode,
+            }, h(LockKeyhole, { size: 16 }), "ロック")
+          ),
+          h("form", { onSubmit: submitNote },
+            field("バージョン", h("input", {
+              value: draft.version,
+              onChange: (event) => updateDraft("version", event.target.value.slice(0, 20)),
+              placeholder: "例：β 0.5",
+              maxLength: 20,
+              required: true,
+            })),
+            field("種類", h("select", {
+              value: draft.category,
+              onChange: (event) => updateDraft("category", event.target.value),
+            },
+              ["アップデート", "改善", "お知らせ", "メンテナンス"].map((category) =>
+                h("option", { key: category, value: category }, category)
+              )
+            )),
+            field("タイトル", h("input", {
+              value: draft.title,
+              onChange: (event) => updateDraft("title", event.target.value.slice(0, 60)),
+              placeholder: "更新内容のタイトル",
+              maxLength: 60,
+              required: true,
+            })),
+            field("本文", h("textarea", {
+              value: draft.body,
+              onChange: (event) => updateDraft("body", event.target.value.slice(0, 500)),
+              placeholder: "どこが変わったか、利用者に伝わる言葉で入力します。",
+              rows: 5,
+              maxLength: 500,
+              required: true,
+            })),
+            saveMessage && h("p", { className: "soft-message", role: "status" }, saveMessage),
+            h("div", { className: "developer-editor-actions" },
+              draft.id && h("button", { type: "button", className: "secondary-button", onClick: resetDraft }, "編集をやめる"),
+              h("button", {
+                type: "submit",
+                className: "primary-button",
+                disabled: saving || !draft.version.trim() || !draft.title.trim() || !draft.body.trim(),
+              }, h(Send, { size: 17 }), saving ? "保存中..." : draft.id ? "更新する" : "公開する")
+            )
+          )
+        )
+      : h("div", { className: "developer-access" },
+          showUnlock
+            ? h("form", { className: "developer-unlock-form", onSubmit: unlockDeveloperMode },
+                field("開発者キー", h("input", {
+                  type: "password",
+                  value: developerKey,
+                  onChange: (event) => {
+                    setDeveloperKey(event.target.value);
+                    setAccessMessage("");
+                  },
+                  autoComplete: "off",
+                  placeholder: "開発者キーを入力",
+                  required: true,
+                })),
+                accessMessage && h("p", { className: "form-error", role: "alert" }, accessMessage),
+                h("div", { className: "developer-editor-actions" },
+                  h("button", { type: "button", className: "secondary-button", onClick: () => setShowUnlock(false) }, "閉じる"),
+                  h("button", { type: "submit", className: "primary-button", disabled: !developerKey.trim() }, h(KeyRound, { size: 16 }), "開発者として開く")
+                )
+              )
+            : h("button", {
+                type: "button",
+                className: "developer-unlock-button",
+                onClick: () => setShowUnlock(true),
+              }, h(LockKeyhole, { size: 15 }), "開発者用")
+        ),
+    h("div", { className: "update-note-list" },
+      orderedNotes.map((note) =>
+        h("article", { className: "update-note-card", key: note.id },
+          h("div", { className: "update-note-meta" },
+            h("span", { className: `update-category ${note.category || "アップデート"}` }, note.category || "アップデート"),
+            h("strong", null, note.version || "β版")
+          ),
+          h("h2", null, note.title),
+          h("p", null, note.body),
+          h("footer", null,
+            h("time", { dateTime: note.publishedAt }, formatDate(note.publishedAt)),
+            isDeveloper && !note.isDefault && h("div", { className: "update-note-actions" },
+              h("button", {
+                type: "button",
+                onClick: () => editNote(note),
+                title: "このノートを編集",
+                "aria-label": `${note.title}を編集`,
+              }, h(Edit3, { size: 16 })),
+              h("button", {
+                type: "button",
+                onClick: () => {
+                  if (window.confirm("このアップデートノートを削除しますか？")) deleteNote(note.id);
+                },
+                title: "このノートを削除",
+                "aria-label": `${note.title}を削除`,
+              }, h(Trash2, { size: 16 }))
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+function QuizList({ quizzes, openQuiz, message, clearMessage, developerMode = false, deleteQuiz }) {
+  const [practiceMode, setPracticeMode] = useState(developerMode ? "manage" : "");
   const [selectedSubject, setSelectedSubject] = useState("");
   const subjectGroups = useMemo(() => getSubjectGroups(quizzes), [quizzes]);
-  const visibleQuizzes = selectedSubject
+  const subjectQuizzes = selectedSubject
     ? quizzes.filter((quiz) => quiz.subject === selectedSubject)
-    : quizzes;
+    : [];
+  const visibleQuizzes = developerMode || practiceMode === "all"
+    ? quizzes
+    : practiceMode === "subject"
+      ? subjectQuizzes
+      : [];
+
+  const startQuizPool = (quizPool) => {
+    if (!quizPool.length) return;
+    openQuiz(quizPool[0].id, quizPool);
+  };
+
   useEffect(() => {
     if (selectedSubject && !subjectGroups.some((group) => group.subject === selectedSubject)) {
       setSelectedSubject("");
@@ -1254,29 +1933,91 @@ function QuizList({ quizzes, openQuiz, message, clearMessage }) {
 
   return h("section", { className: "screen" },
     h(Header, {
-      eyebrow: "Quiz",
-      title: "クイズ一覧",
-      body: selectedSubject
-        ? `${selectedSubject}の問題群だけで挑戦できます。`
-        : "教科ごとの問題群を選んで、まずは一問だけ挑戦。"
+      eyebrow: developerMode ? "Developer management" : "Quiz",
+      title: developerMode ? "クイズ一覧" : "問題を解く",
+      body: developerMode
+        ? "開発者管理モードです。このクラスで作成された問題を確認・削除できます。"
+        : "全体から回すか、科目を絞って回すかを選べます。"
     }),
+    developerMode && h("div", { className: "developer-mode-notice", role: "status" },
+      h(LockKeyhole, { size: 18 }),
+      h("span", null, "開発者管理モード"),
+      h("small", null, "削除した問題は元に戻せません")
+    ),
     message && h("button", { className: "notice", onClick: clearMessage }, h(CheckCircle2, { size: 18 }), message),
-    h("div", { className: "subject-filter", "aria-label": "教科で問題群を選ぶ" },
-      h("button", {
-        className: `subject-filter-button ${selectedSubject === "" ? "active" : ""}`,
-        type: "button",
-        onClick: () => setSelectedSubject(""),
-      }, `すべて ${quizzes.length}`),
-      subjectGroups.map((group) =>
+    !developerMode && h("section", { className: "quiz-mode-card", "aria-labelledby": "quiz-mode-title" },
+      h("div", { className: "quiz-mode-heading" },
+        h("span", null, "出題範囲"),
+        h("h2", { id: "quiz-mode-title" }, "どの問題を回しますか？")
+      ),
+      h("div", { className: "quiz-mode-selector" },
         h("button", {
-          className: `subject-filter-button ${selectedSubject === group.subject ? "active" : ""}`,
+          className: `quiz-mode-choice ${practiceMode === "all" ? "selected" : ""}`,
           type: "button",
-          key: group.subject,
-          onClick: () => setSelectedSubject(group.subject),
-        }, `${group.subject} ${group.count}`)
+          disabled: quizzes.length === 0,
+          "aria-pressed": practiceMode === "all",
+          onClick: () => {
+            setPracticeMode("all");
+            setSelectedSubject("");
+          },
+        },
+          h(Sparkles, { size: 21 }),
+          h("span", null, "全体から回す"),
+          h("small", null, `${quizzes.length}問から挑戦`)
+        ),
+        h("button", {
+          className: `quiz-mode-choice ${practiceMode === "subject" ? "selected" : ""}`,
+          type: "button",
+          disabled: subjectGroups.length === 0,
+          "aria-pressed": practiceMode === "subject",
+          onClick: () => {
+            setPracticeMode("subject");
+            setSelectedSubject("");
+          },
+        },
+          h(BookOpen, { size: 21 }),
+          h("span", null, "科目ごとに回す"),
+          h("small", null, "科目を選んで挑戦")
+        )
+      ),
+      practiceMode === "all" && h("div", { className: "quiz-mode-start" },
+        h("p", null, `このクラスの${quizzes.length}問を順番に回します。`),
+        h("button", {
+          className: "primary-button",
+          type: "button",
+          disabled: quizzes.length === 0,
+          onClick: () => startQuizPool(quizzes),
+        }, h(Sparkles, { size: 18 }), "全体から挑戦を始める")
+      ),
+      practiceMode === "subject" && h(React.Fragment, null,
+        h("p", { className: "quiz-subject-prompt" }, "挑戦する科目を選んでください。"),
+        h("div", { className: "subject-filter", "aria-label": "挑戦する科目を選ぶ" },
+          subjectGroups.map((group) =>
+            h("button", {
+              className: `subject-filter-button ${selectedSubject === group.subject ? "active" : ""}`,
+              type: "button",
+              key: group.subject,
+              "aria-pressed": selectedSubject === group.subject,
+              onClick: () => setSelectedSubject(group.subject),
+            }, `${group.subject} ${group.count}`)
+          )
+        ),
+        selectedSubject && h("div", { className: "quiz-mode-start" },
+          h("p", null, `${selectedSubject}の${subjectQuizzes.length}問を順番に回します。`),
+          h("button", {
+            className: "primary-button",
+            type: "button",
+            disabled: subjectQuizzes.length === 0,
+            onClick: () => startQuizPool(subjectQuizzes),
+          }, h(BookOpen, { size: 18 }), `${selectedSubject}から挑戦を始める`)
+        )
       )
     ),
-    h("div", { className: "quiz-list" },
+    (developerMode || practiceMode === "all" || (practiceMode === "subject" && selectedSubject)) && h("div", { className: "quiz-list" },
+      !developerMode && h("div", { className: "quiz-list-heading" },
+        h("span", null, "問題一覧"),
+        h("strong", null, practiceMode === "all" ? `全体 ${visibleQuizzes.length}問` : `${selectedSubject} ${visibleQuizzes.length}問`)
+      ),
       visibleQuizzes.length === 0 && h("article", { className: "empty-card" },
         h("strong", null, "この問題群にはまだクイズがありません"),
         h("p", null, "作問も大切な学びです。最初の一問を作ってみましょう。")
@@ -1287,7 +2028,20 @@ function QuizList({ quizzes, openQuiz, message, clearMessage }) {
           h("h2", null, quiz.title),
           h("p", null, quiz.question),
           h("div", { className: "meta-row" }, h("span", null, quiz.author), h("span", null, `${quiz.solvedCount} 回挑戦`), h("span", null, `${quiz.likes} いい問題`)),
-          h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id, visibleQuizzes) }, "挑戦する")
+          h("div", { className: "quiz-card-actions" },
+            h("button", { className: "primary-button", onClick: () => openQuiz(quiz.id, visibleQuizzes) }, "挑戦する"),
+            developerMode && !isSampleQuiz(quiz) && h("button", {
+              className: "developer-delete-button",
+              type: "button",
+              title: "このクイズを削除",
+              "aria-label": `${quiz.title}を削除`,
+              onClick: () => {
+                if (window.confirm(`「${quiz.title}」を削除しますか？この操作は元に戻せません。`)) {
+                  deleteQuiz?.(quiz.id);
+                }
+              },
+            }, h(Trash2, { size: 18 }), h("span", null, "削除"))
+          )
         )
       )
     )
@@ -1295,20 +2049,48 @@ function QuizList({ quizzes, openQuiz, message, clearMessage }) {
 }
 
 function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
-  const [selected, setSelected] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(null);
   const [result, setResult] = useState(null);
+  const answerLockedRef = useRef(false);
+  const resultRef = useRef(null);
+  const correctChoiceIndex = getCorrectChoiceIndex(quiz);
+
   const retryCurrentQuiz = () => {
-    setSelected("");
+    answerLockedRef.current = false;
+    setSelectedIndex(null);
     setResult(null);
   };
+
   useEffect(() => { retryCurrentQuiz(); }, [quiz.id, quizProgress?.current]);
-  const answerNow = (choice) => {
-    if (result) return;
-    const isCorrect = choice === quiz.correctAnswer;
-    setSelected(choice);
-    setResult({ isCorrect, isUnknown: choice === "__unknown__" });
-    recordAnswer(quiz, isCorrect);
+
+  useEffect(() => {
+    if (!result || !resultRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      resultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      resultRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [result]);
+
+  const answerNow = (index) => {
+    if (answerLockedRef.current) return;
+    answerLockedRef.current = true;
+
+    const isUnknown = index === -1;
+    const hasValidAnswer = correctChoiceIndex >= 0 && correctChoiceIndex < quiz.choices.length;
+    const isCorrect = hasValidAnswer && !isUnknown && index === correctChoiceIndex;
+    setSelectedIndex(index);
+    setResult({ isCorrect, isUnknown, hasValidAnswer });
+
+    if (hasValidAnswer) {
+      try {
+        recordAnswer(quiz, isCorrect);
+      } catch (error) {
+        console.error("回答記録の保存中に問題が発生しました。", error);
+      }
+    }
   };
+
   return h("section", { className: "screen" },
     h(Header, { eyebrow: quiz.subject, title: quiz.title, body: `${quiz.difficulty}・${quiz.author}` }),
     h("article", { className: "answer-card" },
@@ -1317,38 +2099,64 @@ function AnswerScreen({ quiz, recordAnswer, quizProgress, goToNextQuiz }) {
       h("div", { className: "choice-list" },
         quiz.choices.map((choice, index) =>
           h("button", {
-            className: `choice-button ${selected === choice ? "selected" : ""} ${result && choice === quiz.correctAnswer ? "correct" : ""}`,
-            key: choice,
-            onClick: () => answerNow(choice),
+            type: "button",
+            className: [
+              "choice-button",
+              selectedIndex === index ? "selected" : "",
+              result && index === correctChoiceIndex ? "correct" : "",
+              result && selectedIndex === index && !result.isCorrect ? "incorrect" : "",
+            ].filter(Boolean).join(" "),
+            key: `${index}-${choice}`,
+            onClick: () => answerNow(index),
             disabled: !!result,
+            "aria-pressed": selectedIndex === index,
           }, h("span", null, String.fromCharCode(65 + index)), choice)
         ),
         h("button", {
-          className: `choice-button unknown-choice ${selected === "__unknown__" ? "selected" : ""}`,
-          onClick: () => answerNow("__unknown__"),
+          type: "button",
+          className: `choice-button unknown-choice ${selectedIndex === -1 ? "selected incorrect" : ""}`,
+          onClick: () => answerNow(-1),
           disabled: !!result,
+          "aria-pressed": selectedIndex === -1,
         }, h("span", null, "?"), "分からない")
       ),
       !result
         ? h("p", { className: "tap-answer-note" }, "選択肢を押すと、そのまま判定に進みます。")
-        : h("div", { className: `result-box ${result.isCorrect ? "positive" : "learning"}` },
-          h("strong", null, result.isCorrect ? "正解です！" : "不正解でも、間違えて良い。ここから学べます"),
-          !result.isCorrect && h("p", null, "挑戦したことが学びです。ここから理解が深まります。"),
-          h("div", { className: "explanation" }, h("span", null, "解説"), h("p", null, quiz.explanation)),
-          quizProgress && !quizProgress.hasNext && result.isCorrect && h("p", { className: "complete-message" }, "解き始めた時点の問題をすべて挑戦しました。挑戦したことが学びです。"),
-          h("div", { className: "answer-actions" },
-            (result.isCorrect || quizProgress?.hasNext) &&
-              h("button", { className: "secondary-button", onClick: retryCurrentQuiz }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
-            h("button", {
-              className: "primary-button",
-              onClick: () => !result.isCorrect && !quizProgress?.hasNext
-                ? retryCurrentQuiz()
-                : goToNextQuiz(result.isCorrect),
-            },
-              quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度挑戦する",
-              h(ChevronRight, { size: 18 })
-            )
-          )
+        : h("div", {
+          className: `result-box ${result.isCorrect ? "positive" : "learning"}`,
+          ref: resultRef,
+          tabIndex: -1,
+          role: "status",
+          "aria-live": "polite",
+        },
+          !result.hasValidAnswer
+            ? h(React.Fragment, null,
+                h("strong", null, "この問題の正解設定を読み取れませんでした"),
+                h("p", null, "作問者が編集画面で正解を選び直すと、判定できるようになります。"),
+                h("div", { className: "answer-actions" },
+                  h("button", { className: "secondary-button", type: "button", onClick: retryCurrentQuiz }, h(RotateCcw, { size: 16 }), "もう一度確認する")
+                )
+              )
+            : h(React.Fragment, null,
+                h("strong", null, result.isCorrect ? "正解です！" : "不正解でも、間違えて良い。ここから学べます"),
+                !result.isCorrect && h("p", null, "挑戦したことが学びです。ここから理解が深まります。"),
+                h("div", { className: "explanation" }, h("span", null, "解説"), h("p", null, quiz.explanation)),
+                quizProgress && !quizProgress.hasNext && result.isCorrect && h("p", { className: "complete-message" }, "解き始めた時点の問題をすべて挑戦しました。挑戦したことが学びです。"),
+                h("div", { className: "answer-actions" },
+                  (result.isCorrect || quizProgress?.hasNext) &&
+                    h("button", { className: "secondary-button", type: "button", onClick: retryCurrentQuiz }, h(RotateCcw, { size: 16 }), "もう一回挑戦"),
+                  h("button", {
+                    className: "primary-button",
+                    type: "button",
+                    onClick: () => !result.isCorrect && !quizProgress?.hasNext
+                      ? retryCurrentQuiz()
+                      : goToNextQuiz(result.isCorrect),
+                  },
+                    quizProgress?.hasNext ? "次の問題へ" : result.isCorrect ? "ホームへ戻る" : "もう一度挑戦する",
+                    h(ChevronRight, { size: 18 })
+                  )
+                )
+              )
         )
     )
   );
@@ -1427,9 +2235,65 @@ function field(label, control) {
   return h("label", null, label, control);
 }
 
-function StudyScreen({ comments, addComment: onAddComment, addReply, reactToComment }) {
+function TalkProfileTrigger({ identity, profileKey, isOpen, setOpenProfileKey, compact = false }) {
+  const roleLabel = identity.role === "teacher" ? "教員" : identity.role === "student" ? "生徒" : "クラスメンバー";
+  return h("div", {
+    className: "talk-profile-anchor",
+    onMouseEnter: () => setOpenProfileKey(profileKey),
+    onMouseLeave: () => setOpenProfileKey((current) => current === profileKey ? "" : current),
+    onBlur: (event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) {
+        setOpenProfileKey((current) => current === profileKey ? "" : current);
+      }
+    },
+  },
+    h("button", {
+      type: "button",
+      className: compact ? "talk-profile-trigger compact" : "talk-profile-trigger",
+      onClick: () => setOpenProfileKey(profileKey),
+      onFocus: () => setOpenProfileKey(profileKey),
+      "aria-expanded": isOpen,
+      "aria-label": `${identity.name}のプロフィールを見る`,
+    },
+      h("div", {
+        className: compact ? "avatar reply-avatar" : "avatar",
+        style: { background: identity.avatarColor },
+        "aria-hidden": "true",
+      }, identity.initial),
+      h("strong", null, identity.name)
+    ),
+    isOpen && h("aside", {
+      className: "talk-profile-popover",
+      role: "dialog",
+      "aria-label": `${identity.name}のプロフィール`,
+    },
+      h("div", { className: "talk-profile-popover-header" },
+        h("div", {
+          className: "avatar talk-profile-popover-avatar",
+          style: { background: identity.avatarColor },
+          "aria-hidden": "true",
+        }, identity.initial),
+        h("div", null,
+          h("strong", null, identity.name),
+          h("span", { className: "talk-profile-role" }, roleLabel)
+        )
+      ),
+      h("p", null, identity.bio || "一言はまだ設定されていません")
+    )
+  );
+}
+
+function StudyScreen({ comments, activeClass, addComment: onAddComment, addReply, reactToComment }) {
   const [text, setText] = useState("");
   const [replyDrafts, setReplyDrafts] = useState({});
+  const [openProfileKey, setOpenProfileKey] = useState("");
+  useEffect(() => {
+    const closeProfile = (event) => {
+      if (!event.target?.closest?.(".talk-profile-anchor")) setOpenProfileKey("");
+    };
+    document.addEventListener("pointerdown", closeProfile);
+    return () => document.removeEventListener("pointerdown", closeProfile);
+  }, []);
   const submitComment = () => {
     if (!text.trim()) return;
     onAddComment(text.trim());
@@ -1449,9 +2313,16 @@ function StudyScreen({ comments, addComment: onAddComment, addReply, reactToComm
       h("button", { className: "primary-button", onClick: submitComment }, h(Send, { size: 17 }), "投稿")
     ),
     h("div", { className: "comment-list" },
-      comments.map((comment) =>
-        h("article", { className: "comment-card", key: comment.id },
-          h("div", { className: "avatar-row" }, h("div", { className: "avatar" }, "匿"), h("strong", null, comment.author)),
+      comments.map((comment) => {
+        const commentAuthor = getTalkIdentity(comment, activeClass);
+        const commentProfileKey = `comment:${comment.id}`;
+        return h("article", { className: "comment-card", key: comment.id },
+          h(TalkProfileTrigger, {
+            identity: commentAuthor,
+            profileKey: commentProfileKey,
+            isOpen: openProfileKey === commentProfileKey,
+            setOpenProfileKey,
+          }),
           h("p", null, comment.text),
           h("div", { className: "reaction-row" },
             reactionChoices.map((reaction) => h("button", {
@@ -1461,10 +2332,20 @@ function StudyScreen({ comments, addComment: onAddComment, addReply, reactToComm
             }, `${reaction} ${(comment.reactions || {})[reaction] || 0}`))
           ),
           (comment.replies || []).length > 0 && h("div", { className: "reply-list" },
-            (comment.replies || []).map((reply) => h("div", { className: "reply-card", key: reply.id },
-              h("strong", null, reply.author),
-              h("p", null, reply.text)
-            ))
+            (comment.replies || []).map((reply) => {
+              const replyAuthor = getTalkIdentity(reply, activeClass);
+              const replyProfileKey = `reply:${comment.id}:${reply.id}`;
+              return h("div", { className: "reply-card", key: reply.id },
+                h(TalkProfileTrigger, {
+                  identity: replyAuthor,
+                  profileKey: replyProfileKey,
+                  isOpen: openProfileKey === replyProfileKey,
+                  setOpenProfileKey,
+                  compact: true,
+                }),
+                h("p", null, reply.text)
+              );
+            })
           ),
           h("div", { className: "reply-box" },
             h("input", {
@@ -1474,8 +2355,8 @@ function StudyScreen({ comments, addComment: onAddComment, addReply, reactToComm
             }),
             h("button", { type: "button", onClick: () => submitReply(comment.id) }, h(Send, { size: 15 }))
           )
-        )
-      )
+        );
+      })
     )
   );
 }
@@ -1514,9 +2395,10 @@ function SubjectBars({ title, answered, correct }) {
   );
 }
 
-function ProfileScreen({ profile, classProfile, membership, activeClass, resetRole, setScreen, ownQuizzes, editOwnQuiz, updateProfile }) {
-  const roleLabel = membership.role === "teacher" ? "教員" : "生徒";
+function ProfileScreen({ profile, classProfile, membership, activeClass, classProfiles, resetRole, setScreen, ownQuizzes, editOwnQuiz, updateProfile, developerMode = false }) {
+  const roleLabel = developerMode ? "開発者" : membership.role === "teacher" ? "教員" : "生徒";
   const displayProfile = classProfile || profile;
+  const studentMembers = membership.role === "teacher" ? (activeClass?.members || []) : [];
   const [draftName, setDraftName] = useState(displayProfile.name || profile.name);
   const [draftBio, setDraftBio] = useState(normalizeBio(displayProfile.bio));
   const [savedNote, setSavedNote] = useState("");
@@ -1571,6 +2453,38 @@ function ProfileScreen({ profile, classProfile, membership, activeClass, resetRo
       h("button", { className: "secondary-button", type: "submit" }, "プロフィールを保存")
     ),
     h(ClassBanner, { membership, activeClass, setScreen }),
+    membership.role === "teacher" && h("section", { className: "student-id-card" },
+      h("div", { className: "section-title-row" },
+        h("div", null,
+          h("span", null, "Student IDs"),
+          h("h2", null, "生徒の名前と利用者ID")
+        ),
+        h("strong", null, `${studentMembers.length}人`)
+      ),
+      h("p", { className: "student-id-note" }, "生徒が利用者IDを忘れたときに、ここから確認できます。"),
+      studentMembers.length
+        ? h("div", { className: "student-id-list" },
+            studentMembers.map((student) => {
+              const studentProfile = classProfiles[getProfileKey(activeClass.id, student.id)];
+              const studentName = studentProfile?.name || student.name || "匿名ユーザー";
+              return h("article", { key: student.id },
+                h("div", {
+                  className: "student-id-avatar",
+                  style: { background: studentProfile?.avatarColor || pickAvatarColor(student.id) },
+                }, studentName.slice(0, 1)),
+                h("div", null,
+                  h("strong", null, studentName),
+                  h("span", null, student.id)
+                )
+              );
+            })
+          )
+        : h("div", { className: "empty-dashboard" },
+            h(Users, { size: 24 }),
+            h("strong", null, "参加済みの生徒はまだいません"),
+            h("p", null, "生徒が初めて入室すると、名前と利用者IDが表示されます。")
+          )
+    ),
     h("div", { className: "stats-grid" },
       h(Stat, { label: "作成したクイズ数", value: displayProfile.createdCount || 0, icon: Edit3 }),
       h(Stat, { label: "解いたクイズ数", value: displayProfile.solvedCount || 0, icon: BookOpen }),
@@ -1626,6 +2540,7 @@ function BottomNav({ current, setScreen }) {
   const items = [
     ["profile", "プロフィール", CircleUserRound],
     ["quizzes", "クイズ", BookOpen],
+    ["home", "ホーム", House],
     ["study", "トーク", MessageCircle],
     ["create", "作問", PencilLine],
   ];

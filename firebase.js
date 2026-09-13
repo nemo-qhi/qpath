@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import {
   collection,
+  deleteDoc,
   doc,
   getFirestore,
   getDocs,
@@ -69,6 +70,10 @@ export function subscribeComments(onData, onError) {
   return subscribe("comments", onData, onError);
 }
 
+export function subscribeUpdateNotes(onData, onError) {
+  return subscribe("updateNotes", onData, onError);
+}
+
 export function saveClass(classroom) {
   return setDoc(doc(db, "classes", classroom.id), classroom, { merge: true });
 }
@@ -77,14 +82,40 @@ export function saveQuiz(quiz) {
   return setDoc(doc(db, "quizzes", quiz.id), quiz, { merge: true });
 }
 
+export function removeQuiz(quizId) {
+  return deleteDoc(doc(db, "quizzes", quizId));
+}
+
 export function saveComment(comment) {
   return setDoc(doc(db, "comments", comment.id), comment, { merge: true });
 }
 
+export function saveUpdateNote(note) {
+  return setDoc(doc(db, "updateNotes", note.id), note, { merge: true });
+}
+
+export function removeUpdateNote(noteId) {
+  return deleteDoc(doc(db, "updateNotes", noteId));
+}
+
 export async function findClassByCode(code) {
-  const snapshot = await getDocs(query(collection(db, "classes"), where("code", "==", code)));
-  if (snapshot.empty) return null;
-  const item = snapshot.docs[0];
+  const normalizedCode = String(code ?? "").normalize("NFKC").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const classesRef = collection(db, "classes");
+  const snapshot = await getDocs(query(classesRef, where("code", "==", normalizedCode)));
+  let item = snapshot.docs[0];
+
+  if (!item) {
+    const fallbackSnapshot = await getDocs(classesRef);
+    item = fallbackSnapshot.docs.find((candidate) => {
+      const storedCode = String(candidate.data().code ?? "")
+        .normalize("NFKC")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "");
+      return storedCode === normalizedCode;
+    });
+  }
+
+  if (!item) return null;
   return { id: item.id, ...item.data() };
 }
 

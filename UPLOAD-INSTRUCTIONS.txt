@@ -4,3 +4,11 @@ GitHubでは、このフォルダの中身をリポジトリ直下へ上書き�
 ZIPファイルそのものや、外側のフォルダをアップロードするのではなく、index.html / src / vendor / .nojekyll / 404.html を直下に置きます。
 
 この版には、利用者ID、トーク、リプライ、自作クイズ編集、プロフィール保存、URLハッシュリンク対応など、最近追加した内容を含めています。
+
+GitHub Pagesの公開先:
+https://nemo-qhi.github.io/q-path/
+
+ロール選択画面から開く共有URL:
+https://nemo-qhi.github.io/q-path/#role
+
+この版は q-path のようなリポジトリ配下のURLでも動く相対パス構成です。
