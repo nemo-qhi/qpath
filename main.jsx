@@ -503,7 +503,7 @@ function BottomNav({ current, setScreen }) {
   const items = [
     { key: "profile", label: "プロフィール", icon: CircleUserRound },
     { key: "quizzes", label: "クイズ", icon: BookOpen },
-    { key: "study", label: "自習", icon: MessageCircle },
+    { key: "study", label: "相互学習", icon: MessageCircle },
     { key: "create", label: "作問", icon: PencilLine },
   ];
   return (
